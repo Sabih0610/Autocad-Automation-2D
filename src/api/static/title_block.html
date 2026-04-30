@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Title Block Update</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      line-height: 1.5;
+      margin: 40px auto;
+      max-width: 860px;
+      padding: 0 16px;
+    }
+    label {
+      display: block;
+      font-weight: bold;
+      margin-top: 12px;
+    }
+    input, button {
+      box-sizing: border-box;
+      font: inherit;
+      margin-top: 4px;
+      padding: 8px;
+      width: 100%;
+    }
+    .actions {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-top: 16px;
+    }
+    pre {
+      background: #f5f5f5;
+      overflow-x: auto;
+      padding: 16px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>Title Block Update</h1>
+  <form id="title-block-form">
+    <label for="drawings_folder">Drawings folder</label>
+    <input id="drawings_folder" name="drawings_folder" type="text" value="E:\RC-Projects">
+
+    <label for="file_pattern">File pattern</label>
+    <input id="file_pattern" name="file_pattern" type="text" value="drawing_*.dwg">
+
+    <label for="title_block_name">Title block name</label>
+    <input id="title_block_name" name="title_block_name" type="text" value="TITLE_BLOCK_TEST">
+
+    <label for="rev">REV</label>
+    <input id="rev" name="rev" type="text" value="G">
+
+    <label for="date">DATE</label>
+    <input id="date" name="date" type="text" value="2026-05-01">
+
+    <label for="drawn_by">DRAWN_BY</label>
+    <input id="drawn_by" name="drawn_by" type="text" value="S. AAMIR">
+
+    <div class="actions">
+      <button type="button" id="submit-dry-run">Submit (dry-run)</button>
+      <button type="button" id="submit-execute">Submit (execute)</button>
+    </div>
+  </form>
+
+  <h2>Response</h2>
+  <pre id="result">No request submitted yet.</pre>
+
+  <p><a href="/">Back to home</a></p>
+
+  <script>
+    const result = document.getElementById("result");
+
+    async function submitRequest(dryRun) {
+      const payload = {
+        drawings_folder: document.getElementById("drawings_folder").value,
+        file_pattern: document.getElementById("file_pattern").value,
+        title_block_name: document.getElementById("title_block_name").value,
+        updates: {
+          REV: document.getElementById("rev").value,
+          DATE: document.getElementById("date").value,
+          DRAWN_BY: document.getElementById("drawn_by").value
+        },
+        dry_run: dryRun
+      };
+
+      result.textContent = "Submitting...";
+
+      try {
+        const response = await fetch("/api/title-block-update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        result.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        result.textContent = JSON.stringify({ ok: false, error: String(error) }, null, 2);
+      }
+    }
+
+    document.getElementById("submit-dry-run").addEventListener("click", () => submitRequest(true));
+    document.getElementById("submit-execute").addEventListener("click", () => submitRequest(false));
+  </script>
+</body>
+</html>

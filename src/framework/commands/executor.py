@@ -1,0 +1,481 @@
+"""Deterministic AutoCAD COM executor for Mode 2 command dictionaries.
+
+This module executes structured command dictionaries only. It does not accept
+raw AutoCAD script text, call AI, expose API routes, or render previews.
+"""
+
+from __future__ import annotations
+
+import math
+from pathlib import Path
+from typing import Any, Callable
+
+from src.parametric.vessel.dwg_export import (
+    AutoCADNotRunningError,
+    _com_retry,
+    _get_acad,
+)
+
+
+class CommandExecutionError(Exception):
+    """Raised when a command sequence cannot be executed."""
+
+
+def acad_point(x: float, y: float, z: float = 0.0):
+    """Return a COM-safe AutoCAD 3D point value."""
+    values = (float(x), float(y), float(z))
+
+    try:
+        import pythoncom
+        import win32com.client
+
+        return win32com.client.VARIANT(
+            pythoncom.VT_ARRAY | pythoncom.VT_R8,
+            values,
+        )
+    except Exception:
+        return values
+
+
+def _acad_double_array(values: list[float]):
+    numbers = tuple(float(value) for value in values)
+
+    try:
+        import pythoncom
+        import win32com.client
+
+        return win32com.client.VARIANT(
+            pythoncom.VT_ARRAY | pythoncom.VT_R8,
+            numbers,
+        )
+    except Exception:
+        return numbers
+
+
+def _point_from_pair(pair: list[float]) -> Any:
+    return acad_point(pair[0], pair[1])
+
+
+def _set_com_attr(obj: Any, name: str, value: Any, description: str) -> None:
+    _com_retry(lambda: setattr(obj, name, value), description)
+
+
+def ensure_layer(
+    layers: Any,
+    layer_name: str,
+    known_layers: set[str] | None = None,
+):
+    """Ensure an AutoCAD layer exists and return it when possible."""
+    if not layer_name or layer_name == "0":
+        return None
+
+    if known_layers is not None and layer_name in known_layers:
+        try:
+            return _com_retry(
+                lambda: layers.Item(layer_name),
+                f"getting layer {layer_name}",
+            )
+        except Exception:
+            pass
+
+    try:
+        layer = _com_retry(
+            lambda: layers.Item(layer_name),
+            f"getting layer {layer_name}",
+        )
+    except Exception:
+        layer = _com_retry(
+            lambda: layers.Add(layer_name),
+            f"creating layer {layer_name}",
+        )
+
+    if known_layers is not None:
+        known_layers.add(layer_name)
+
+    return layer
+
+
+def _prepare_layer(command: dict, layers: Any, known_layers: set[str]) -> str | None:
+    layer_name = command.get("layer")
+    if layer_name and layer_name != "0":
+        ensure_layer(layers, layer_name, known_layers)
+    return layer_name
+
+
+def _apply_entity_layer(entity: Any, layer_name: str | None) -> None:
+    if layer_name:
+        _set_com_attr(entity, "Layer", layer_name, f"setting entity layer {layer_name}")
+
+
+def _execute_layer(command: dict, _msp: Any, layers: Any, known_layers: set[str]) -> None:
+    layer_name = command["layer_name"]
+    layer = ensure_layer(layers, layer_name, known_layers)
+
+    if layer is None:
+        return
+
+    if "color" in command:
+        _set_com_attr(layer, "Color", int(command["color"]), f"setting layer {layer_name} color")
+
+    if "linetype" in command:
+        try:
+            _set_com_attr(
+                layer,
+                "Linetype",
+                command["linetype"],
+                f"setting layer {layer_name} linetype",
+            )
+        except Exception:
+            pass
+
+
+def _execute_line(command: dict, msp: Any, layers: Any, known_layers: set[str]) -> None:
+    layer_name = _prepare_layer(command, layers, known_layers)
+    entity = _com_retry(
+        lambda: msp.AddLine(
+            _point_from_pair(command["from"]),
+            _point_from_pair(command["to"]),
+        ),
+        "adding line",
+    )
+    _apply_entity_layer(entity, layer_name)
+
+
+def _execute_circle(command: dict, msp: Any, layers: Any, known_layers: set[str]) -> None:
+    layer_name = _prepare_layer(command, layers, known_layers)
+    entity = _com_retry(
+        lambda: msp.AddCircle(
+            _point_from_pair(command["center"]),
+            float(command["radius"]),
+        ),
+        "adding circle",
+    )
+    _apply_entity_layer(entity, layer_name)
+
+
+def _execute_arc(command: dict, msp: Any, layers: Any, known_layers: set[str]) -> None:
+    layer_name = _prepare_layer(command, layers, known_layers)
+    entity = _com_retry(
+        lambda: msp.AddArc(
+            _point_from_pair(command["center"]),
+            float(command["radius"]),
+            math.radians(float(command["start_angle_degrees"])),
+            math.radians(float(command["end_angle_degrees"])),
+        ),
+        "adding arc",
+    )
+    _apply_entity_layer(entity, layer_name)
+
+
+def _execute_ellipse(command: dict, msp: Any, layers: Any, known_layers: set[str]) -> None:
+    layer_name = _prepare_layer(command, layers, known_layers)
+    entity = _com_retry(
+        lambda: msp.AddEllipse(
+            _point_from_pair(command["center"]),
+            _point_from_pair(command["major_axis_endpoint"]),
+            float(command["ratio"]),
+        ),
+        "adding ellipse",
+    )
+
+    if "start_angle_degrees" in command:
+        _set_com_attr(
+            entity,
+            "StartAngle",
+            math.radians(float(command["start_angle_degrees"])),
+            "setting ellipse start angle",
+        )
+
+    if "end_angle_degrees" in command:
+        _set_com_attr(
+            entity,
+            "EndAngle",
+            math.radians(float(command["end_angle_degrees"])),
+            "setting ellipse end angle",
+        )
+
+    _apply_entity_layer(entity, layer_name)
+
+
+def _execute_polyline(command: dict, msp: Any, layers: Any, known_layers: set[str]) -> None:
+    layer_name = _prepare_layer(command, layers, known_layers)
+    flat_points = [
+        coordinate
+        for point in command["points"]
+        for coordinate in (point[0], point[1])
+    ]
+
+    if hasattr(msp, "AddLightWeightPolyline"):
+        entity = _com_retry(
+            lambda: msp.AddLightWeightPolyline(_acad_double_array(flat_points)),
+            "adding lightweight polyline",
+        )
+    else:
+        flat_3d_points = [
+            coordinate
+            for point in command["points"]
+            for coordinate in (point[0], point[1], 0.0)
+        ]
+        entity = _com_retry(
+            lambda: msp.AddPolyline(_acad_double_array(flat_3d_points)),
+            "adding polyline",
+        )
+
+    if command.get("closed") is True:
+        _set_com_attr(entity, "Closed", True, "closing polyline")
+
+    _apply_entity_layer(entity, layer_name)
+
+
+def _execute_text(command: dict, msp: Any, layers: Any, known_layers: set[str]) -> None:
+    layer_name = _prepare_layer(command, layers, known_layers)
+    height = float(command.get("height", 100.0))
+    entity = _com_retry(
+        lambda: msp.AddText(
+            command["text"],
+            _point_from_pair(command["position"]),
+            height,
+        ),
+        "adding text",
+    )
+
+    if "rotation_degrees" in command:
+        _set_com_attr(
+            entity,
+            "Rotation",
+            math.radians(float(command["rotation_degrees"])),
+            "setting text rotation",
+        )
+
+    _apply_entity_layer(entity, layer_name)
+
+
+def _execute_insert(command: dict, msp: Any, layers: Any, known_layers: set[str]) -> None:
+    layer_name = _prepare_layer(command, layers, known_layers)
+    scale = float(command.get("scale", 1.0))
+    rotation = math.radians(float(command.get("rotation_degrees", 0.0)))
+
+    entity = _com_retry(
+        lambda: msp.InsertBlock(
+            _point_from_pair(command["position"]),
+            command["block_name"],
+            scale,
+            scale,
+            scale,
+            rotation,
+        ),
+        f"inserting block {command['block_name']}",
+    )
+    _apply_entity_layer(entity, layer_name)
+
+
+def _execute_dim_linear(command: dict, msp: Any, layers: Any, known_layers: set[str]) -> None:
+    layer_name = _prepare_layer(command, layers, known_layers)
+    entity = _com_retry(
+        lambda: msp.AddDimAligned(
+            _point_from_pair(command["from"]),
+            _point_from_pair(command["to"]),
+            _point_from_pair(command["dim_line_position"]),
+        ),
+        "adding aligned dimension",
+    )
+
+    if "text_override" in command:
+        _set_com_attr(
+            entity,
+            "TextOverride",
+            command["text_override"],
+            "setting dimension text override",
+        )
+
+    _apply_entity_layer(entity, layer_name)
+
+
+_COMMAND_HANDLERS: dict[str, Callable[[dict, Any, Any, set[str]], None]] = {
+    "LAYER": _execute_layer,
+    "LINE": _execute_line,
+    "CIRCLE": _execute_circle,
+    "ARC": _execute_arc,
+    "ELLIPSE": _execute_ellipse,
+    "POLYLINE": _execute_polyline,
+    "TEXT": _execute_text,
+    "INSERT": _execute_insert,
+    "DIM_LINEAR": _execute_dim_linear,
+}
+
+
+def _execute_one_command(
+    command: dict,
+    msp: Any,
+    layers: Any,
+    known_layers: set[str],
+) -> None:
+    command_type = command.get("command")
+    handler = _COMMAND_HANDLERS.get(command_type)
+
+    if handler is None:
+        raise CommandExecutionError(f"Unsupported command type: {command_type}")
+
+    handler(command, msp, layers, known_layers)
+
+
+def _active_document(acad: Any):
+    try:
+        doc = _com_retry(lambda: acad.ActiveDocument, "getting active document")
+    except Exception as exc:
+        raise CommandExecutionError(
+            "No active AutoCAD document is available."
+        ) from exc
+
+    if doc is None:
+        raise CommandExecutionError("No active AutoCAD document is available.")
+
+    return doc
+
+
+def _document_path(doc: Any, target_dwg_path: str | None) -> str | None:
+    if target_dwg_path:
+        return str(Path(target_dwg_path))
+
+    return _safe_get_dwg_path(doc)
+
+
+def _safe_get_document_name(doc) -> str | None:
+    try:
+        return _com_retry(lambda: getattr(doc, "Name", None), "reading document name")
+    except Exception:
+        return None
+
+
+def _safe_get_dwg_path(doc) -> str | None:
+    try:
+        return _com_retry(lambda: getattr(doc, "FullName", None), "reading document path")
+    except Exception:
+        return None
+
+
+def _safe_modelspace_count(msp) -> int | None:
+    try:
+        return int(_com_retry(lambda: msp.Count, "reading modelspace count"))
+    except Exception:
+        pass
+
+    try:
+        return len(msp)
+    except Exception:
+        return None
+
+
+def _activate_regen_zoom(acad, doc) -> tuple[bool, str | None]:
+    try:
+        _com_retry(lambda: doc.Activate(), "activating document")
+        _com_retry(lambda: doc.Regen(1), "regenerating document")
+        _com_retry(lambda: acad.ZoomExtents(), "zooming extents")
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+    return True, None
+
+
+def execute_commands(
+    commands: list[dict],
+    target_dwg_path: str | None = None,
+    save: bool = True,
+    continue_on_error: bool = True,
+    zoom_extents: bool = True,
+) -> dict:
+    """Execute structured command dictionaries through AutoCAD COM."""
+    if not isinstance(commands, list) or not commands:
+        raise CommandExecutionError("commands must be a non-empty list")
+
+    acad = _get_acad()
+
+    if target_dwg_path:
+        doc = _com_retry(
+            lambda: acad.Documents.Open(str(target_dwg_path)),
+            f"opening DWG {target_dwg_path}",
+        )
+    else:
+        doc = _active_document(acad)
+
+    msp = _com_retry(lambda: doc.ModelSpace, "getting model space")
+    layers = _com_retry(lambda: doc.Layers, "getting layers")
+    known_layers: set[str] = set()
+    document_name = _safe_get_document_name(doc)
+    dwg_path = _document_path(doc, target_dwg_path)
+    entity_count_before = _safe_modelspace_count(msp)
+
+    executed_count = 0
+    errors: list[dict[str, Any]] = []
+
+    for index, command in enumerate(commands):
+        try:
+            _execute_one_command(command, msp, layers, known_layers)
+            executed_count += 1
+        except Exception as exc:
+            errors.append(
+                {
+                    "command_index": index,
+                    "command": command,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+
+            if not continue_on_error:
+                break
+
+    if save:
+        try:
+            _com_retry(lambda: doc.Save(), "saving document")
+        except Exception as exc:
+            errors.append(
+                {
+                    "command_index": None,
+                    "command": "SAVE",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+
+    entity_count_after = _safe_modelspace_count(msp)
+    zoom_extents_called = False
+    zoom_error = None
+
+    if zoom_extents:
+        zoom_extents_called, zoom_error = _activate_regen_zoom(acad, doc)
+
+    return {
+        "ok": not errors,
+        "executed_count": executed_count,
+        "total_count": len(commands),
+        "errors": errors,
+        "dwg_path": dwg_path,
+        "document_name": document_name,
+        "entity_count_before": entity_count_before,
+        "entity_count_after": entity_count_after,
+        "zoom_extents_called": zoom_extents_called,
+        "zoom_error": zoom_error,
+    }
+
+
+def execute_command_sequence(
+    command_sequence: dict,
+    target_dwg_path: str | None = None,
+    save: bool = True,
+    continue_on_error: bool = True,
+    zoom_extents: bool = True,
+) -> dict:
+    """Validate and execute a full command sequence object."""
+    from src.framework.commands.schema import validate_command_sequence
+
+    validation_errors = validate_command_sequence(command_sequence)
+    if validation_errors:
+        joined_errors = "\n".join(f"- {error}" for error in validation_errors)
+        raise CommandExecutionError(f"Invalid command sequence:\n{joined_errors}")
+
+    return execute_commands(
+        command_sequence["commands"],
+        target_dwg_path=target_dwg_path,
+        save=save,
+        continue_on_error=continue_on_error,
+        zoom_extents=zoom_extents,
+    )

@@ -1,0 +1,1204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sketch Chat Mode</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1117;
+      --sidebar: #171a21;
+      --panel: #20242d;
+      --panel-soft: #262b36;
+      --border: #383f4d;
+      --text: #f2f5f8;
+      --muted: #aeb6c2;
+      --muted-2: #7f8998;
+      --primary: #2f81f7;
+      --primary-hover: #1f6feb;
+      --success: #2ea043;
+      --danger: #ff7b72;
+      --danger-soft: rgba(248, 81, 73, 0.15);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, sans-serif;
+      line-height: 1.5;
+      margin: 0;
+    }
+
+    a {
+      color: #8ab4ff;
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      background: var(--sidebar);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      position: sticky;
+      top: 0;
+    }
+
+    .sidebar-top,
+    .sidebar-bottom {
+      padding: 18px;
+    }
+
+    .sidebar-top {
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand {
+      font-size: 1.2rem;
+      font-weight: 700;
+      margin-bottom: 14px;
+    }
+
+    .new-button,
+    .send-button,
+    .build-button {
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 700;
+      padding: 11px 14px;
+    }
+
+    .new-button {
+      background: var(--panel-soft);
+      border: 1px solid var(--border);
+      color: var(--text);
+      width: 100%;
+    }
+
+    .sidebar-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 12px;
+    }
+
+    .sidebar-bottom {
+      border-top: 1px solid var(--border);
+      display: grid;
+      gap: 8px;
+    }
+
+    .section-title {
+      color: var(--muted);
+      font-size: 0.8rem;
+      letter-spacing: 0.04em;
+      margin: 0 6px 10px;
+      text-transform: uppercase;
+    }
+
+    .recent-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .recent-item {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 10px;
+      text-align: left;
+      width: 100%;
+    }
+
+    .recent-item:hover {
+      background: var(--panel);
+      border-color: var(--border);
+    }
+
+    .recent-title {
+      color: var(--text);
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .recent-meta {
+      color: var(--muted-2);
+      font-size: 0.82rem;
+      margin-top: 4px;
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: 1fr auto;
+      height: 100vh;
+      min-width: 0;
+    }
+
+    .chat {
+      overflow-y: auto;
+      padding: 34px 24px 24px;
+    }
+
+    .chat-inner,
+    .composer-inner {
+      margin: 0 auto;
+      max-width: 920px;
+    }
+
+    .hero {
+      margin: 36px 0 30px;
+      text-align: center;
+    }
+
+    .hero h1 {
+      font-size: 2rem;
+      margin: 0 0 8px;
+    }
+
+    .hero p {
+      color: var(--muted);
+      margin: 0;
+    }
+
+    .messages {
+      display: grid;
+      gap: 16px;
+    }
+
+    .message {
+      display: flex;
+    }
+
+    .message.user {
+      justify-content: flex-end;
+    }
+
+    .bubble {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      max-width: min(760px, 100%);
+      padding: 14px 16px;
+      white-space: pre-wrap;
+    }
+
+    .assistant .bubble {
+      background: var(--panel);
+    }
+
+    .user .bubble {
+      background: #1f6feb;
+      border-color: #2f81f7;
+      color: #ffffff;
+    }
+
+    .system .bubble {
+      background: #151922;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .error .bubble {
+      background: var(--danger-soft);
+      border-color: rgba(248, 81, 73, 0.55);
+      color: #ffd7d3;
+    }
+
+    .message-title {
+      color: var(--text);
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .meta-grid {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .meta-row {
+      color: var(--muted);
+    }
+
+    .meta-row strong {
+      color: var(--text);
+    }
+
+    details {
+      border-top: 1px solid var(--border);
+      margin-top: 12px;
+      padding-top: 10px;
+    }
+
+    summary {
+      color: var(--muted);
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    ul {
+      margin: 8px 0 0 20px;
+      padding: 0;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .build-button {
+      background: var(--success);
+      color: #ffffff;
+    }
+
+    .build-button.danger {
+      background: transparent;
+      border: 1px solid rgba(248, 81, 73, 0.75);
+      color: #ffb4ad;
+    }
+
+    .build-button:disabled,
+    .send-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.65;
+    }
+
+    .composer {
+      background: linear-gradient(180deg, rgba(15, 17, 23, 0), var(--bg) 24px);
+      padding: 24px;
+    }
+
+    .composer-box {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      padding: 12px;
+    }
+
+    textarea {
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      font: inherit;
+      max-height: 180px;
+      min-height: 52px;
+      outline: none;
+      resize: vertical;
+      width: 100%;
+    }
+
+    .send-button {
+      align-self: end;
+      background: var(--primary);
+      color: #ffffff;
+      min-width: 96px;
+    }
+
+    .send-button:hover:not(:disabled) {
+      background: var(--primary-hover);
+    }
+
+    .hint {
+      color: var(--muted-2);
+      font-size: 0.86rem;
+      margin-top: 8px;
+      text-align: center;
+    }
+
+    @media (max-width: 820px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        height: auto;
+        max-height: 42vh;
+        position: relative;
+      }
+
+      .main {
+        height: auto;
+        min-height: 70vh;
+      }
+
+      .composer-box {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <div class="brand">AutoCAD AI</div>
+        <button id="new-sketch" class="new-button" type="button">+ New Sketch</button>
+      </div>
+
+      <div class="sidebar-scroll">
+        <h2 class="section-title">Recent Chats</h2>
+        <div id="recent-list" class="recent-list">
+          <div class="recent-item">No recent sketches yet.</div>
+        </div>
+      </div>
+
+      <div class="sidebar-bottom">
+        <a href="/">Home</a>
+        <a href="/vessel.html">Vessel Generator</a>
+        <a href="/jobs.html">Job History</a>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section id="chat" class="chat">
+        <div class="chat-inner">
+          <div class="hero">
+            <h1>Sketch Chat Mode</h1>
+            <p>Describe what to draw, or ask for a small edit to the active AutoCAD drawing.</p>
+          </div>
+          <div id="messages" class="messages"></div>
+        </div>
+      </section>
+
+      <section class="composer">
+        <div class="composer-inner">
+          <div class="composer-box">
+            <textarea id="prompt" placeholder="Draw a simple rectangle 1000mm wide and 500mm high with a circle in the center and a title above it."></textarea>
+            <button id="send" class="send-button" type="button">Send</button>
+          </div>
+          <div class="hint">Enter sends. Shift+Enter adds a new line. AutoCAD must be open with an active drawing before building or editing.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const messages = document.getElementById("messages");
+    const chat = document.getElementById("chat");
+    const promptInput = document.getElementById("prompt");
+    const sendButton = document.getElementById("send");
+    const newSketchButton = document.getElementById("new-sketch");
+    const recentList = document.getElementById("recent-list");
+    const RECENT_KEY = "autocad_ai_recent_sketches";
+
+    let isSending = false;
+
+    function escapeText(value) {
+      const div = document.createElement("div");
+      div.textContent = value == null ? "" : String(value);
+      return div.innerHTML;
+    }
+
+    function scrollToBottom() {
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function createMessage(role, content, options = {}) {
+      const wrapper = document.createElement("div");
+      wrapper.className = `message ${role}${options.error ? " error" : ""}`;
+
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+
+      if (options.html) {
+        bubble.innerHTML = content;
+      } else {
+        bubble.textContent = content;
+      }
+
+      wrapper.appendChild(bubble);
+      messages.appendChild(wrapper);
+      scrollToBottom();
+      return bubble;
+    }
+
+    function formatIssue(issue) {
+      const severity = issue.severity || "INFO";
+      const index = issue.command_index != null ? ` command ${issue.command_index}` : "";
+      const fix = issue.suggested_fix ? ` Suggested fix: ${issue.suggested_fix}` : "";
+      return `[${severity}]${index}: ${issue.description || ""}${fix}`;
+    }
+
+    const CHAT_ROUTES = {
+      PID: "pid_generate",
+      SKETCH: "sketch_generate",
+      EDIT: "autocad_edit"
+    };
+
+    function normalizeForRouting(text) {
+      return String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
+    }
+
+    function isNewDrawingRequest(text) {
+      const normalized = normalizeForRouting(text);
+
+      const createWords = [
+        "draw ",
+        "create ",
+        "generate ",
+        "build ",
+        "make ",
+        "design ",
+        "prepare ",
+        "draft "
+      ];
+
+      return createWords.some((word) => normalized.startsWith(word));
+    }
+
+    function isPIDRequest(text) {
+      const normalized = normalizeForRouting(text);
+
+      const strongPIDSignals = [
+        "p&id",
+        "p and id",
+        "piping and instrumentation",
+        "piping & instrumentation",
+        "instrumentation diagram",
+        "process diagram",
+        "process unit"
+      ];
+
+      if (/(^|[^a-z0-9])pid([^a-z0-9]|$)/.test(normalized)) {
+        return true;
+      }
+
+      if (strongPIDSignals.some((keyword) => normalized.includes(keyword))) {
+        return true;
+      }
+
+      const weightedPIDSignals = [
+        "separator",
+        "horizontal separator",
+        "vertical vessel",
+        "storage tank",
+        "vessel",
+        "scrubber",
+        "tank",
+        "pump",
+        "pumps",
+        "exchanger",
+        "heat exchanger",
+        "3 phase",
+        "three phase",
+        "vapor outlet",
+        "oil outlet",
+        "water outlet",
+        "feed inlet",
+        "liquid outlet",
+        "suction",
+        "discharge",
+        "gate valve",
+        "control valve",
+        "valves",
+        "instrument",
+        "instruments",
+        "instrument bubble",
+        "level control",
+        "pressure control",
+        "pi-",
+        "pt-",
+        "lt-",
+        "lc-",
+        "fi-",
+        "ti-"
+      ];
+
+      const score = weightedPIDSignals.reduce((count, keyword) => {
+        return normalized.includes(keyword) ? count + 1 : count;
+      }, 0);
+
+      return score >= 2;
+    }
+
+    function isEditRequest(text) {
+      if (isNewDrawingRequest(text)) {
+        return false;
+      }
+
+      const normalized = normalizeForRouting(text);
+
+      const directEditVerbs = [
+        "delete",
+        "remove",
+        "erase",
+        "move",
+        "shift",
+        "change",
+        "rename",
+        "modify",
+        "update",
+        "replace",
+        "resize",
+        "extend",
+        "trim",
+        "rotate",
+        "edit"
+      ];
+
+      const contextEditVerbs = [
+        ...directEditVerbs,
+        "add",
+        "connect"
+      ];
+
+      const existingContextWords = [
+        "existing",
+        "current drawing",
+        "current autocad",
+        "this drawing",
+        "active drawing",
+        "the title",
+        "title text",
+        "the circle",
+        "the vessel",
+        "the valve",
+        "the line",
+        "the text",
+        "this line",
+        "this vessel",
+        "that circle",
+        "outlet line",
+        "separator outlet"
+      ];
+
+      const startsWithDirectEditVerb = directEditVerbs.some((verb) => {
+        return normalized === verb || normalized.startsWith(`${verb} `);
+      });
+      const hasContextEditVerb = contextEditVerbs.some((verb) => {
+        return normalized === verb || normalized.includes(`${verb} `);
+      });
+      const hasExistingContext = existingContextWords.some((word) => normalized.includes(word));
+
+      return startsWithDirectEditVerb || (hasContextEditVerb && hasExistingContext);
+    }
+
+    function decideChatRoute(text) {
+      const newDrawingRequest = isNewDrawingRequest(text);
+      const pidRequest = isPIDRequest(text);
+      const editRequest = isEditRequest(text);
+
+      if (newDrawingRequest && pidRequest) {
+        return CHAT_ROUTES.PID;
+      }
+
+      if (newDrawingRequest) {
+        return CHAT_ROUTES.SKETCH;
+      }
+
+      if (editRequest) {
+        return CHAT_ROUTES.EDIT;
+      }
+
+      if (pidRequest) {
+        return CHAT_ROUTES.PID;
+      }
+
+      return CHAT_ROUTES.SKETCH;
+    }
+
+    function detailsHtml(data) {
+      const assumptions = Array.isArray(data.assumptions) ? data.assumptions : [];
+      const verifier = data.verifier_result || {};
+      const issues = Array.isArray(verifier.issues) ? verifier.issues : [];
+      const preview = data.preview_download_url;
+
+      const assumptionItems = assumptions.length
+        ? assumptions.map((item) => `<li>${escapeText(item)}</li>`).join("")
+        : "<li>None</li>";
+
+      const issueItems = issues.length
+        ? issues.map((issue) => `<li>${escapeText(formatIssue(issue))}</li>`).join("")
+        : "<li>None</li>";
+
+      const previewLine = preview
+        ? `<div class="meta-row"><strong>Preview:</strong> <a href="${escapeText(preview)}">DXF preview</a></div>`
+        : "";
+
+      return `
+        <details>
+          <summary>Details</summary>
+          <div class="meta-grid">
+            <div class="meta-row"><strong>Assumptions</strong></div>
+            <ul>${assumptionItems}</ul>
+            <div class="meta-row"><strong>Verifier issues</strong></div>
+            <ul>${issueItems}</ul>
+            <div class="meta-row"><strong>Command count:</strong> ${escapeText(data.command_count)}</div>
+            ${previewLine}
+          </div>
+        </details>
+      `;
+    }
+
+    function planMessageHtml(data) {
+      const verdict = data.verifier_verdict || "SKIPPED";
+      const isRejected = verdict === "REJECT";
+      const issueCount = data.verifier_result?.issues?.length || 0;
+
+      return `
+        <div class="message-title">${isRejected ? "Verifier rejected this plan." : "Generated command plan."}</div>
+        <div class="meta-grid">
+          <div class="meta-row"><strong>Summary:</strong> ${escapeText(data.summary || "No summary.")}</div>
+          <div class="meta-row"><strong>Drawing type:</strong> ${escapeText(data.estimated_drawing_type || "unspecified")}</div>
+          <div class="meta-row"><strong>Verifier:</strong> ${escapeText(verdict)}</div>
+          <div class="meta-row"><strong>Commands:</strong> ${escapeText(data.command_count)}</div>
+          ${issueCount ? `<div class="meta-row"><strong>Issues:</strong> ${issueCount}</div>` : ""}
+        </div>
+        ${detailsHtml(data)}
+        <div class="actions">
+          <button class="build-button ${isRejected ? "danger" : ""}" type="button">
+            ${isRejected ? "Build Anyway" : "Build in AutoCAD"}
+          </button>
+        </div>
+      `;
+    }
+
+    function pidDetailsHtml(data) {
+      const assumptions = Array.isArray(data.assumptions) ? data.assumptions : [];
+      const componentScene = data.component_scene || {};
+      const components = Array.isArray(componentScene.components) ? componentScene.components : [];
+
+      const assumptionItems = assumptions.length
+        ? assumptions.map((item) => `<li>${escapeText(item)}</li>`).join("")
+        : "<li>None</li>";
+
+      const componentItems = components.length
+        ? components.slice(0, 20).map((component) => {
+            const label = component.tag || component.label || component.text || component.id;
+            return `<li>${escapeText(component.component_type)}: ${escapeText(label)}</li>`;
+          }).join("")
+        : "<li>None</li>";
+
+      return `
+        <details>
+          <summary>Details</summary>
+          <div class="meta-grid">
+            <div class="meta-row"><strong>Assumptions</strong></div>
+            <ul>${assumptionItems}</ul>
+            <div class="meta-row"><strong>Components</strong></div>
+            <ul>${componentItems}</ul>
+          </div>
+        </details>
+      `;
+    }
+
+    function pidPlanMessageHtml(data) {
+      const fallbackLine = data.fallback_used
+        ? `<div class="meta-row"><strong>Fallback:</strong> The AI component planner failed, so I used the deterministic ${escapeText(data.template_name || "P&ID")} template. You can still edit it afterward using chat.</div>`
+        : "";
+      const templateLine = data.template_name
+        ? `<div class="meta-row"><strong>Template:</strong> ${escapeText(data.template_name)}</div>`
+        : "";
+
+      return `
+        <div class="message-title">P&ID component plan created.</div>
+        <div class="meta-grid">
+          <div class="meta-row"><strong>Title:</strong> ${escapeText(data.title || "P&ID")}</div>
+          <div class="meta-row"><strong>Strategy:</strong> ${escapeText(data.planner_strategy || "unknown")}</div>
+          ${templateLine}
+          <div class="meta-row"><strong>Components:</strong> ${escapeText(data.component_count)}</div>
+          <div class="meta-row"><strong>Commands:</strong> ${escapeText(data.command_count)}</div>
+          ${fallbackLine}
+          <div class="meta-row">Ready to build in AutoCAD.</div>
+        </div>
+        ${pidDetailsHtml(data)}
+        <div class="actions">
+          <button class="build-button" type="button">Build P&amp;ID in AutoCAD</button>
+        </div>
+      `;
+    }
+
+    function buildResultHtml(data) {
+      const result = data.execution_result || {};
+      return `
+        <div class="message-title">Drawing built in AutoCAD.</div>
+        <div class="meta-grid">
+          <div class="meta-row"><strong>Document:</strong> ${escapeText(result.document_name || "active drawing")}</div>
+          <div class="meta-row"><strong>Executed commands:</strong> ${escapeText(result.executed_count ?? "")} of ${escapeText(result.total_count ?? "")}</div>
+          <div class="meta-row"><strong>Entities before:</strong> ${escapeText(result.entity_count_before ?? "unknown")}</div>
+          <div class="meta-row"><strong>Entities after:</strong> ${escapeText(result.entity_count_after ?? "unknown")}</div>
+          <div class="meta-row"><strong>Zoom extents:</strong> ${result.zoom_extents_called ? "yes" : "no"}</div>
+          ${result.zoom_error ? `<div class="meta-row"><strong>Zoom note:</strong> ${escapeText(result.zoom_error)}</div>` : ""}
+        </div>
+      `;
+    }
+
+    function pidBuildResultHtml(data) {
+      const result = data.execution_result || {};
+      return `
+        <div class="message-title">Done — P&amp;ID built in AutoCAD.</div>
+        <div class="meta-grid">
+          <div class="meta-row"><strong>Document:</strong> ${escapeText(result.document_name || "active drawing")}</div>
+          <div class="meta-row"><strong>Executed:</strong> ${escapeText(result.executed_count ?? "")}/${escapeText(result.total_count ?? "")} commands</div>
+          <div class="meta-row"><strong>Entities:</strong> ${escapeText(result.entity_count_before ?? "unknown")} → ${escapeText(result.entity_count_after ?? "unknown")}</div>
+          <div class="meta-row"><strong>Zoom extents:</strong> ${result.zoom_extents_called ? "yes" : "no"}</div>
+          ${result.zoom_error ? `<div class="meta-row"><strong>Zoom note:</strong> ${escapeText(result.zoom_error)}</div>` : ""}
+        </div>
+      `;
+    }
+
+    function editDetailsHtml(data) {
+      const plan = data.edit_plan || {};
+      const assumptions = Array.isArray(plan.assumptions) ? plan.assumptions : [];
+      const deleteHandles = Array.isArray(plan.delete_handles) ? plan.delete_handles : [];
+      const commands = Array.isArray(plan.commands) ? plan.commands : [];
+
+      const assumptionItems = assumptions.length
+        ? assumptions.map((item) => `<li>${escapeText(item)}</li>`).join("")
+        : "<li>None</li>";
+
+      const handleItems = deleteHandles.length
+        ? deleteHandles.map((handle) => `<li>${escapeText(handle)}</li>`).join("")
+        : "<li>None</li>";
+
+      return `
+        <details>
+          <summary>Details</summary>
+          <div class="meta-grid">
+            <div class="meta-row"><strong>Edit intent:</strong> ${escapeText(plan.edit_intent || "unspecified")}</div>
+            <div class="meta-row"><strong>Target:</strong> ${escapeText(plan.target_description || "unspecified")}</div>
+            <div class="meta-row"><strong>Assumptions</strong></div>
+            <ul>${assumptionItems}</ul>
+            <div class="meta-row"><strong>Delete handles</strong></div>
+            <ul>${handleItems}</ul>
+            <div class="meta-row"><strong>Added command count:</strong> ${escapeText(commands.length)}</div>
+          </div>
+        </details>
+      `;
+    }
+
+    function editErrorDetailsHtml(result) {
+      const errors = Array.isArray(result.errors) ? result.errors : [];
+      if (!errors.length) {
+        return "";
+      }
+
+      const errorItems = errors.map((item) => {
+        const type = item.type ? `[${item.type}] ` : "";
+        const handle = item.handle ? `handle ${item.handle}: ` : "";
+        const command = item.command_index != null ? `command ${item.command_index}: ` : "";
+        return `<li>${escapeText(`${type}${handle}${command}${item.error || "Unknown error"}`)}</li>`;
+      }).join("");
+
+      return `
+        <details>
+          <summary>Execution issues</summary>
+          <ul>${errorItems}</ul>
+        </details>
+      `;
+    }
+
+    function editResultHtml(data) {
+      const result = data.execution_result || {};
+      const plan = data.edit_plan || {};
+      const deletedCount = result.deleted_count ?? 0;
+      const addedCount = result.added_executed_count ?? 0;
+      const title = data.ok
+        ? "Done. Applied live edit in AutoCAD."
+        : "AutoCAD reported issues while applying the edit.";
+
+      return `
+        <div class="message-title">${title}</div>
+        <div class="meta-grid">
+          <div class="meta-row"><strong>Edit:</strong> ${escapeText(plan.summary || result.summary || "Live edit complete.")}</div>
+          <div class="meta-row"><strong>Deleted:</strong> ${escapeText(deletedCount)} of ${escapeText(result.delete_count ?? 0)}</div>
+          <div class="meta-row"><strong>Added commands:</strong> ${escapeText(addedCount)} of ${escapeText(result.added_total_count ?? 0)}</div>
+          <div class="meta-row"><strong>Document:</strong> ${escapeText(result.document_name || data.document_name || "active drawing")}</div>
+          <div class="meta-row"><strong>Entities before:</strong> ${escapeText(result.entity_count_before ?? "unknown")}</div>
+          <div class="meta-row"><strong>Entities after:</strong> ${escapeText(result.entity_count_after ?? "unknown")}</div>
+          <div class="meta-row"><strong>Zoom extents:</strong> ${result.zoom_extents_called ? "yes" : "no"}</div>
+          ${result.zoom_error ? `<div class="meta-row"><strong>Zoom note:</strong> ${escapeText(result.zoom_error)}</div>` : ""}
+        </div>
+        ${editDetailsHtml(data)}
+        ${editErrorDetailsHtml(result)}
+      `;
+    }
+
+    async function readJson(response) {
+      try {
+        return await response.json();
+      } catch (error) {
+        return {};
+      }
+    }
+
+    function errorMessage(data, fallback) {
+      if (typeof data.detail === "string") {
+        return data.detail;
+      }
+      if (data.message) {
+        return data.message;
+      }
+      return fallback;
+    }
+
+    function editApiErrorMessage(response, data) {
+      if (response.status === 503) {
+        return "I could not apply that edit because AutoCAD is not reachable. Open AutoCAD with an active drawing and try again.";
+      }
+
+      if (response.status === 400) {
+        return `I could not understand that edit clearly enough to apply it. ${errorMessage(data, "")}`.trim();
+      }
+
+      if (response.status === 502) {
+        return `I could not generate a valid edit plan. ${errorMessage(data, "")}`.trim();
+      }
+
+      if (response.status >= 500) {
+        return `The backend hit an error while applying the live edit. ${errorMessage(data, "")}`.trim();
+      }
+
+      return errorMessage(data, "I could not apply that edit.");
+    }
+
+    function setSending(value) {
+      isSending = value;
+      sendButton.disabled = value;
+      sendButton.textContent = value ? "Sending..." : "Send";
+    }
+
+    function loadRecent() {
+      try {
+        return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+      } catch (error) {
+        return [];
+      }
+    }
+
+    function saveRecent(item) {
+      const next = [
+        item,
+        ...loadRecent().filter((existing) => existing.prompt !== item.prompt)
+      ].slice(0, 20);
+      localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+      renderRecent();
+    }
+
+    function renderRecent() {
+      const items = loadRecent();
+      recentList.innerHTML = "";
+
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "recent-item";
+        empty.textContent = "No recent chats yet.";
+        recentList.appendChild(empty);
+        return;
+      }
+
+      for (const item of items) {
+        const button = document.createElement("button");
+        button.className = "recent-item";
+        button.type = "button";
+        button.innerHTML = `
+          <div class="recent-title">${escapeText(item.prompt)}</div>
+          <div class="recent-meta">${escapeText(item.verdict || "planned")} | ${escapeText(item.time || "")}</div>
+        `;
+        button.addEventListener("click", () => {
+          promptInput.value = item.prompt || "";
+          promptInput.focus();
+        });
+        recentList.appendChild(button);
+      }
+    }
+
+    async function generatePlan(prompt) {
+      const status = createMessage("system", "Generating command plan...");
+
+      const response = await fetch("/api/sketch/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt,
+          run_verifier: true,
+          create_preview: false
+        })
+      });
+      const data = await readJson(response);
+
+      if (!response.ok || !data.ok) {
+        status.textContent = "Generation failed.";
+        throw new Error(errorMessage(data, "Could not generate a sketch plan."));
+      }
+
+      data.route_type = CHAT_ROUTES.SKETCH;
+      status.textContent = "Plan generated. Review it before building in AutoCAD.";
+      const planBubble = createMessage("assistant", planMessageHtml(data), { html: true });
+      const buildButton = planBubble.querySelector(".build-button");
+
+      buildButton.addEventListener("click", () => buildInAutoCAD(data, buildButton));
+
+      saveRecent({
+        prompt,
+        summary: data.summary,
+        verdict: data.verifier_verdict,
+        time: new Date().toLocaleString()
+      });
+    }
+
+    async function buildInAutoCAD(plan, button) {
+      button.disabled = true;
+      button.textContent = "Building...";
+
+      const status = createMessage(
+        "system",
+        "Connecting to AutoCAD...\nExecuting commands...\nZooming to generated drawing..."
+      );
+
+      try {
+        const response = await fetch("/api/sketch/approve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token: plan.token,
+            save: false,
+            target_dwg_path: null
+          })
+        });
+        const data = await readJson(response);
+
+        if (response.status === 503) {
+          status.textContent = "AutoCAD is not reachable. Open AutoCAD with a drawing active, then click Build again.";
+          button.disabled = false;
+          button.textContent = plan.verifier_verdict === "REJECT" ? "Build Anyway" : "Build in AutoCAD";
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(errorMessage(data, "Could not build in AutoCAD."));
+        }
+
+        if (!data.ok) {
+          status.textContent = "AutoCAD reported execution issues. Review the details below.";
+          createMessage("assistant", buildResultHtml(data), { html: true, error: true });
+          button.disabled = false;
+          button.textContent = plan.verifier_verdict === "REJECT" ? "Build Anyway" : "Build in AutoCAD";
+          return;
+        }
+
+        status.textContent = "Done.";
+        createMessage("assistant", buildResultHtml(data), { html: true });
+      } catch (error) {
+        status.textContent = "Build failed.";
+        createMessage("assistant", String(error.message || error), { error: true });
+        button.disabled = false;
+        button.textContent = plan.verifier_verdict === "REJECT" ? "Build Anyway" : "Build in AutoCAD";
+      }
+    }
+
+    async function handlePIDRequest(prompt) {
+      const status = createMessage("system", "Planning P&ID using reusable components...");
+
+      try {
+        const response = await fetch("/api/pid/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt,
+            drawing_style: "clean schematic P&ID with orthogonal pipe routing and readable labels"
+          })
+        });
+        const data = await readJson(response);
+
+        if (!response.ok || !data.ok) {
+          status.textContent = "P&ID planning failed.";
+          throw new Error(`I could not generate the P&ID component plan. ${errorMessage(data, "")}`.trim());
+        }
+
+        data.route_type = CHAT_ROUTES.PID;
+        status.textContent = "P&ID plan generated. Review it before building in AutoCAD.";
+        const planBubble = createMessage("assistant", pidPlanMessageHtml(data), { html: true });
+        const buildButton = planBubble.querySelector(".build-button");
+
+        buildButton.addEventListener("click", () => buildPIDInAutoCAD(data, buildButton));
+
+        saveRecent({
+          prompt,
+          summary: data.summary,
+          verdict: data.fallback_used ? `pid ${data.template_name || "template"}` : "pid planned",
+          time: new Date().toLocaleString()
+        });
+      } catch (error) {
+        createMessage("assistant", String(error.message || error), { error: true });
+      }
+    }
+
+    async function buildPIDInAutoCAD(plan, button) {
+      button.disabled = true;
+      button.textContent = "Building P&ID...";
+
+      const status = createMessage(
+        "system",
+        "Connecting to AutoCAD...\nExecuting P&ID component commands...\nZooming to generated P&ID..."
+      );
+
+      try {
+        const response = await fetch("/api/pid/approve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token: plan.token,
+            save: false,
+            target_dwg_path: null
+          })
+        });
+        const data = await readJson(response);
+
+        if (response.status === 503) {
+          status.textContent = "AutoCAD is not running or no active drawing is open. Open AutoCAD and try Build again.";
+          button.disabled = false;
+          button.textContent = "Build P&ID in AutoCAD";
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(errorMessage(data, "Could not build the P&ID in AutoCAD."));
+        }
+
+        if (!data.ok) {
+          status.textContent = "AutoCAD reported execution issues while building the P&ID.";
+          createMessage("assistant", pidBuildResultHtml(data), { html: true, error: true });
+          button.disabled = false;
+          button.textContent = "Build P&ID in AutoCAD";
+          return;
+        }
+
+        status.textContent = "Done.";
+        createMessage("assistant", pidBuildResultHtml(data), { html: true });
+      } catch (error) {
+        status.textContent = "P&ID build failed.";
+        createMessage("assistant", String(error.message || error), { error: true });
+        button.disabled = false;
+        button.textContent = "Build P&ID in AutoCAD";
+      }
+    }
+
+    async function applyLiveEdit(prompt) {
+      const status = createMessage("system", "Inspecting active AutoCAD drawing...");
+
+      try {
+        status.textContent = "Working on the active AutoCAD drawing...\nInspecting current entities...\nPlanning and applying the edit...";
+
+        const response = await fetch("/api/autocad/edit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt,
+            max_entities: 200,
+            auto_execute: true,
+            save: false,
+            target_dwg_path: null
+          })
+        });
+        const data = await readJson(response);
+
+        if (!response.ok) {
+          status.textContent = "Live edit failed.";
+          throw new Error(editApiErrorMessage(response, data));
+        }
+
+        if (!data.ok) {
+          status.textContent = "Edit plan ran, but AutoCAD reported issues.";
+          createMessage("assistant", editResultHtml(data), { html: true, error: true });
+        } else {
+          const documentName = data.execution_result?.document_name || data.document_name || "the active drawing";
+          status.textContent = `Done — updated ${documentName}.`;
+          createMessage("assistant", editResultHtml(data), { html: true });
+        }
+
+        saveRecent({
+          prompt,
+          summary: data.edit_plan?.summary,
+          verdict: data.ok ? "edited" : "edit issues",
+          time: new Date().toLocaleString()
+        });
+      } catch (error) {
+        createMessage("assistant", String(error.message || error), { error: true });
+      }
+    }
+
+    async function sendPrompt() {
+      const prompt = promptInput.value.trim();
+      if (!prompt || isSending) {
+        return;
+      }
+
+      promptInput.value = "";
+      createMessage("user", prompt);
+      setSending(true);
+
+      try {
+        const newDrawingRequest = isNewDrawingRequest(prompt);
+        const pidRequest = isPIDRequest(prompt);
+        const editRequest = isEditRequest(prompt);
+
+        console.log("Routing message:", prompt);
+        console.log("isNewDrawingRequest:", newDrawingRequest);
+        console.log("isPIDRequest:", pidRequest);
+        console.log("isEditRequest:", editRequest);
+        const route = decideChatRoute(prompt);
+        console.log("decideChatRoute:", route);
+
+        if (route === CHAT_ROUTES.PID) {
+          console.log("Route selected: PID");
+          await handlePIDRequest(prompt);
+        } else if (route === CHAT_ROUTES.EDIT) {
+          console.log("Route selected: EDIT");
+          await applyLiveEdit(prompt);
+        } else {
+          console.log("Route selected: SKETCH");
+          await generatePlan(prompt);
+        }
+      } catch (error) {
+        createMessage("assistant", String(error.message || error), { error: true });
+      } finally {
+        setSending(false);
+        promptInput.focus();
+      }
+    }
+
+    sendButton.addEventListener("click", sendPrompt);
+    promptInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendPrompt();
+      }
+    });
+
+    newSketchButton.addEventListener("click", () => {
+      messages.innerHTML = "";
+      promptInput.value = "";
+      promptInput.focus();
+    });
+
+    renderRecent();
+    createMessage("assistant", "Open AutoCAD with an active drawing. Describe a new sketch to build, or ask for a small edit to the current drawing.");
+  </script>
+</body>
+</html>

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Job History</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      line-height: 1.5;
+      margin: 40px auto;
+      max-width: 1200px;
+      padding: 0 16px;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      font-weight: bold;
+      gap: 4px;
+    }
+    select, button {
+      font: inherit;
+      padding: 8px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    th, td {
+      border: 1px solid #d0d0d0;
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f2f2f2;
+    }
+    pre {
+      background: #f5f5f5;
+      overflow-x: auto;
+      padding: 16px;
+      white-space: pre-wrap;
+    }
+    .detail {
+      margin-top: 24px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Job History</h1>
+  <div class="controls">
+    <label>
+      Use case
+      <select id="use_case">
+        <option value="">all</option>
+        <option value="title_block_update">title_block_update</option>
+        <option value="line_list_extract">line_list_extract</option>
+        <option value="place_symbol">place_symbol</option>
+        <option value="consistency_check">consistency_check</option>
+      </select>
+    </label>
+    <label>
+      Status
+      <select id="status">
+        <option value="">all</option>
+        <option value="started">started</option>
+        <option value="ok">ok</option>
+        <option value="error">error</option>
+        <option value="partial">partial</option>
+      </select>
+    </label>
+    <label>
+      Limit
+      <select id="limit">
+        <option value="25">25</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+      </select>
+    </label>
+    <div style="align-self: end;">
+      <button id="refresh" type="button">Refresh</button>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Timestamp</th>
+        <th>Source</th>
+        <th>Use Case</th>
+        <th>Status</th>
+        <th>Duration</th>
+        <th>Error</th>
+        <th>View</th>
+      </tr>
+    </thead>
+    <tbody id="jobs-body">
+      <tr><td colspan="7">Loading...</td></tr>
+    </tbody>
+  </table>
+
+  <div class="detail">
+    <h2>Job Detail</h2>
+    <pre id="job-detail">Select a job.</pre>
+  </div>
+
+  <p><a href="/">Back to home</a></p>
+
+  <script>
+    const jobsBody = document.getElementById("jobs-body");
+    const detail = document.getElementById("job-detail");
+    const useCaseSelect = document.getElementById("use_case");
+    const statusSelect = document.getElementById("status");
+    const limitSelect = document.getElementById("limit");
+    const refreshButton = document.getElementById("refresh");
+
+    function truncateError(value) {
+      if (!value) {
+        return "";
+      }
+      return value.length > 80 ? value.slice(0, 77) + "..." : value;
+    }
+
+    async function loadJobs() {
+      jobsBody.innerHTML = "<tr><td colspan=\"7\">Loading...</td></tr>";
+      const params = new URLSearchParams({
+        limit: limitSelect.value
+      });
+
+      if (useCaseSelect.value) {
+        params.set("use_case", useCaseSelect.value);
+      }
+
+      if (statusSelect.value) {
+        params.set("status", statusSelect.value);
+      }
+
+      const response = await fetch("/api/jobs?" + params.toString());
+      const jobs = await response.json();
+
+      if (!jobs.length) {
+        jobsBody.innerHTML = "<tr><td colspan=\"7\">No jobs found.</td></tr>";
+        return;
+      }
+
+      jobsBody.innerHTML = "";
+      for (const job of jobs) {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${job.timestamp_start || ""}</td>
+          <td>${job.source || ""}</td>
+          <td>${job.use_case || ""}</td>
+          <td>${job.status || ""}</td>
+          <td>${job.duration_seconds ?? ""}</td>
+          <td>${truncateError(job.error_message)}</td>
+          <td><a href="/jobs.html?job_id=${encodeURIComponent(job.job_id)}">View</a></td>
+        `;
+        jobsBody.appendChild(row);
+      }
+    }
+
+    async function loadDetailFromQuery() {
+      const params = new URLSearchParams(window.location.search);
+      const jobId = params.get("job_id");
+
+      if (!jobId) {
+        detail.textContent = "Select a job.";
+        return;
+      }
+
+      detail.textContent = "Loading job detail...";
+      const response = await fetch("/api/jobs/" + encodeURIComponent(jobId));
+      if (!response.ok) {
+        detail.textContent = "Job detail not found.";
+        return;
+      }
+
+      const job = await response.json();
+      detail.textContent = JSON.stringify(job, null, 2);
+    }
+
+    async function refreshPageData() {
+      await loadJobs();
+      await loadDetailFromQuery();
+    }
+
+    refreshButton.addEventListener("click", refreshPageData);
+    useCaseSelect.addEventListener("change", refreshPageData);
+    statusSelect.addEventListener("change", refreshPageData);
+    limitSelect.addEventListener("change", refreshPageData);
+
+    refreshPageData();
+  </script>
+</body>
+</html>

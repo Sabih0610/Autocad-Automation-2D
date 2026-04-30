@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Line List Extract</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      line-height: 1.5;
+      margin: 40px auto;
+      max-width: 860px;
+      padding: 0 16px;
+    }
+    label {
+      display: block;
+      font-weight: bold;
+      margin-top: 12px;
+    }
+    input, button {
+      box-sizing: border-box;
+      font: inherit;
+      margin-top: 4px;
+      padding: 8px;
+      width: 100%;
+    }
+    pre {
+      background: #f5f5f5;
+      overflow-x: auto;
+      padding: 16px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>Line List Extract</h1>
+  <form id="line-list-form">
+    <label for="drawings_folder">Drawings folder</label>
+    <input id="drawings_folder" name="drawings_folder" type="text" value="E:\RC-Projects">
+
+    <label for="target_file">Target file</label>
+    <input id="target_file" name="target_file" type="text" value="pid_001.dwg">
+
+    <label for="line_block_name">Line block name</label>
+    <input id="line_block_name" name="line_block_name" type="text" value="LINE_BLOCK_TEST">
+
+    <button type="submit" style="margin-top: 16px;">Submit</button>
+  </form>
+
+  <h2>Response</h2>
+  <pre id="result">No request submitted yet.</pre>
+
+  <p><a href="/">Back to home</a></p>
+
+  <script>
+    const form = document.getElementById("line-list-form");
+    const result = document.getElementById("result");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const payload = {
+        drawings_folder: document.getElementById("drawings_folder").value,
+        target_file: document.getElementById("target_file").value,
+        line_block_name: document.getElementById("line_block_name").value
+      };
+
+      result.textContent = "Submitting...";
+
+      try {
+        const response = await fetch("/api/line-list-extract", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        result.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        result.textContent = JSON.stringify({ ok: false, error: String(error) }, null, 2);
+      }
+    });
+  </script>
+</body>
+</html>

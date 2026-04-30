@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Place Symbol</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      line-height: 1.5;
+      margin: 40px auto;
+      max-width: 860px;
+      padding: 0 16px;
+    }
+    label {
+      display: block;
+      font-weight: bold;
+      margin-top: 12px;
+    }
+    textarea, button {
+      box-sizing: border-box;
+      font: inherit;
+      margin-top: 4px;
+      padding: 8px;
+      width: 100%;
+    }
+    textarea {
+      min-height: 140px;
+    }
+    .actions {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-top: 16px;
+    }
+    pre {
+      background: #f5f5f5;
+      overflow-x: auto;
+      padding: 16px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>Place Symbol</h1>
+  <form id="place-symbol-form">
+    <label for="prompt">Prompt</label>
+    <textarea id="prompt" name="prompt">Add pump P-101 at coordinates 500, 250 on layer P-EQUIPMENT for cooling water.</textarea>
+
+    <div class="actions">
+      <button type="button" id="submit-dry-run">Submit (dry-run)</button>
+      <button type="button" id="submit-execute">Submit (execute)</button>
+    </div>
+  </form>
+
+  <h2>Response</h2>
+  <pre id="result">No request submitted yet.</pre>
+
+  <p><a href="/">Back to home</a></p>
+
+  <script>
+    const result = document.getElementById("result");
+
+    async function submitRequest(execute) {
+      const payload = {
+        prompt: document.getElementById("prompt").value,
+        execute: execute
+      };
+
+      result.textContent = "Submitting...";
+
+      try {
+        const response = await fetch("/api/place-symbol", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        result.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        result.textContent = JSON.stringify({ ok: false, error: String(error) }, null, 2);
+      }
+    }
+
+    document.getElementById("submit-dry-run").addEventListener("click", () => submitRequest(false));
+    document.getElementById("submit-execute").addEventListener("click", () => submitRequest(true));
+  </script>
+</body>
+</html>

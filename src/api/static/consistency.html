@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Consistency Check</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      line-height: 1.5;
+      margin: 40px auto;
+      max-width: 860px;
+      padding: 0 16px;
+    }
+    label {
+      display: block;
+      font-weight: bold;
+      margin-top: 12px;
+    }
+    input, button {
+      box-sizing: border-box;
+      font: inherit;
+      margin-top: 4px;
+      padding: 8px;
+      width: 100%;
+    }
+    .checkbox {
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .checkbox input {
+      margin: 0;
+      width: auto;
+    }
+    pre {
+      background: #f5f5f5;
+      overflow-x: auto;
+      padding: 16px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>Consistency Check</h1>
+  <form id="consistency-form">
+    <label for="pid_path">P&amp;ID path</label>
+    <input id="pid_path" name="pid_path" type="text" value="E:\RC-Projects\pid_001.dwg">
+
+    <label for="excel_path">Excel path (optional)</label>
+    <input id="excel_path" name="excel_path" type="text" value="">
+
+    <label class="checkbox" for="use_ai_explanation">
+      <input id="use_ai_explanation" name="use_ai_explanation" type="checkbox" checked>
+      Use AI explanation
+    </label>
+
+    <button type="submit" style="margin-top: 16px;">Submit</button>
+  </form>
+
+  <h2>Response</h2>
+  <pre id="result">No request submitted yet.</pre>
+
+  <p><a href="/">Back to home</a></p>
+
+  <script>
+    const form = document.getElementById("consistency-form");
+    const result = document.getElementById("result");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const payload = {
+        pid_path: document.getElementById("pid_path").value,
+        excel_path: document.getElementById("excel_path").value,
+        use_ai_explanation: document.getElementById("use_ai_explanation").checked
+      };
+
+      result.textContent = "Submitting...";
+
+      try {
+        const response = await fetch("/api/consistency-check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        result.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        result.textContent = JSON.stringify({ ok: false, error: String(error) }, null, 2);
+      }
+    });
+  </script>
+</body>
+</html>

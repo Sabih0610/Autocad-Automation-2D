@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Generate Vessel</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1117;
+      --sidebar: #171a21;
+      --panel: #20242d;
+      --panel-soft: #262b36;
+      --border: #383f4d;
+      --text: #f2f5f8;
+      --muted: #aeb6c2;
+      --muted-2: #7f8998;
+      --primary: #2f81f7;
+      --primary-hover: #1f6feb;
+      --success: #2ea043;
+      --danger: #ff7b72;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, sans-serif;
+      line-height: 1.5;
+      margin: 0;
+    }
+
+    a {
+      color: #8ab4ff;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      background: var(--sidebar);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      position: sticky;
+      top: 0;
+    }
+
+    .sidebar-top,
+    .sidebar-bottom {
+      padding: 18px;
+    }
+
+    .sidebar-top {
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand {
+      font-size: 1.2rem;
+      font-weight: 700;
+      margin-bottom: 14px;
+    }
+
+    .sidebar-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 12px;
+    }
+
+    .sidebar-bottom {
+      border-top: 1px solid var(--border);
+    }
+
+    .section-title {
+      color: var(--muted);
+      font-size: 0.8rem;
+      letter-spacing: 0.04em;
+      margin: 0 6px 10px;
+      text-transform: uppercase;
+    }
+
+    .history-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .history-item {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      color: var(--muted);
+      padding: 10px;
+    }
+
+    .history-item:hover {
+      background: var(--panel);
+      border-color: var(--border);
+    }
+
+    .history-title {
+      color: var(--text);
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .history-meta {
+      color: var(--muted-2);
+      font-size: 0.82rem;
+      margin-top: 4px;
+    }
+
+    .history-link {
+      display: inline-block;
+      font-size: 0.84rem;
+      margin-top: 6px;
+      text-decoration: none;
+    }
+
+    .main {
+      min-width: 0;
+      padding: 44px 24px;
+    }
+
+    .workspace {
+      margin: 0 auto;
+      max-width: 900px;
+    }
+
+    h1 {
+      font-size: 2rem;
+      margin: 0 0 6px;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      margin: 0 0 28px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+    }
+
+    .panel + .panel {
+      margin-top: 16px;
+    }
+
+    label {
+      color: var(--text);
+      display: block;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    textarea,
+    select,
+    button {
+      font: inherit;
+    }
+
+    textarea,
+    select {
+      background: #11141b;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      width: 100%;
+    }
+
+    textarea {
+      min-height: 220px;
+      padding: 14px;
+      resize: vertical;
+    }
+
+    select {
+      padding: 10px 12px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 700;
+      padding: 11px 14px;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.65;
+    }
+
+    .primary {
+      background: var(--primary);
+      color: #ffffff;
+    }
+
+    .primary:hover:not(:disabled) {
+      background: var(--primary-hover);
+    }
+
+    .success {
+      background: var(--success);
+      color: #ffffff;
+    }
+
+    .secondary {
+      background: var(--panel-soft);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    .new-button {
+      width: 100%;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .actions button {
+      min-width: 160px;
+    }
+
+    .format-row {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+      margin-top: 16px;
+    }
+
+    .review-box,
+    .result-box {
+      background: #11141b;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow-x: auto;
+      padding: 16px;
+      white-space: pre-wrap;
+    }
+
+    .assumptions {
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    .assumptions li {
+      margin: 6px 0;
+    }
+
+    .error {
+      background: rgba(248, 81, 73, 0.12);
+      border: 1px solid rgba(248, 81, 73, 0.45);
+      border-radius: 8px;
+      color: var(--danger);
+      margin-bottom: 16px;
+      padding: 12px;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .download-button {
+      align-items: center;
+      background: var(--success);
+      border-radius: 8px;
+      color: #ffffff;
+      display: inline-flex;
+      font-weight: 700;
+      margin-top: 14px;
+      padding: 11px 14px;
+      text-decoration: none;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    @media (max-width: 780px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        height: auto;
+        max-height: 48vh;
+        position: relative;
+      }
+
+      .format-row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <div class="brand">AutoCAD AI</div>
+        <button id="new-vessel" class="secondary new-button" type="button">+ New Vessel</button>
+      </div>
+
+      <div class="sidebar-scroll">
+        <h2 class="section-title">Recent Generations</h2>
+        <div id="history-list" class="history-list">
+          <div class="history-item">Loading history...</div>
+        </div>
+      </div>
+
+      <div class="sidebar-bottom">
+        <a href="/static/jobs.html">Full job history</a>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="workspace">
+        <h1>Generate Vessel</h1>
+        <p class="subtitle">Describe a horizontal pressure vessel and generate DXF/DWG.</p>
+
+        <div id="error-box" class="error hidden"></div>
+
+        <section id="input-state" class="panel">
+          <label for="prompt">Prompt</label>
+          <textarea id="prompt">Generate horizontal vessel V-201, 2000mm internal diameter, 4500mm tangent-to-tangent length, 2:1 ellipsoidal heads, with a 6-inch process inlet at top center, an 8-inch process outlet at bottom center, a 2-inch level instrument on the side, and a 3-inch relief valve at top.</textarea>
+          <div class="actions">
+            <button id="extract-button" class="primary" type="button">Extract Parameters</button>
+          </div>
+        </section>
+
+        <section id="review-state" class="hidden">
+          <div class="panel">
+            <label>Parameter Review</label>
+            <pre id="review-output" class="review-box"></pre>
+          </div>
+
+          <div class="panel">
+            <label>Assumptions</label>
+            <ul id="assumptions-list" class="assumptions"></ul>
+          </div>
+
+          <div class="panel">
+            <div class="format-row">
+              <div>
+                <label for="output-format">Output format</label>
+                <select id="output-format">
+                  <option value="dwg" selected>DWG</option>
+                  <option value="dxf">DXF</option>
+                </select>
+              </div>
+              <div class="muted">
+                DWG export uses AutoCAD COM. If AutoCAD is not running, this review stays active so you can retry.
+              </div>
+            </div>
+            <div class="actions">
+              <button id="generate-button" class="success" type="button">Generate Drawing</button>
+              <button id="edit-button" class="secondary" type="button">Edit Prompt</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="done-state" class="panel hidden">
+          <h2>Drawing Generated</h2>
+          <div id="done-summary" class="result-box"></div>
+          <a id="download-link" class="download-button" href="#">Download Drawing</a>
+          <div class="actions">
+            <button id="another-button" class="secondary" type="button">Generate Another</button>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const inputState = document.getElementById("input-state");
+    const reviewState = document.getElementById("review-state");
+    const doneState = document.getElementById("done-state");
+    const errorBox = document.getElementById("error-box");
+    const promptInput = document.getElementById("prompt");
+    const extractButton = document.getElementById("extract-button");
+    const generateButton = document.getElementById("generate-button");
+    const editButton = document.getElementById("edit-button");
+    const newVesselButton = document.getElementById("new-vessel");
+    const anotherButton = document.getElementById("another-button");
+    const outputFormat = document.getElementById("output-format");
+    const reviewOutput = document.getElementById("review-output");
+    const assumptionsList = document.getElementById("assumptions-list");
+    const doneSummary = document.getElementById("done-summary");
+    const downloadLink = document.getElementById("download-link");
+    const historyList = document.getElementById("history-list");
+
+    let currentToken = null;
+    let currentExtracted = null;
+
+    function setState(state) {
+      inputState.classList.toggle("hidden", state !== "input");
+      reviewState.classList.toggle("hidden", state !== "review");
+      doneState.classList.toggle("hidden", state !== "done");
+    }
+
+    function showError(message) {
+      if (!message) {
+        errorBox.classList.add("hidden");
+        errorBox.textContent = "";
+        return;
+      }
+      errorBox.textContent = message;
+      errorBox.classList.remove("hidden");
+    }
+
+    function setButtonLoading(button, isLoading, loadingText, normalText) {
+      button.disabled = isLoading;
+      button.textContent = isLoading ? loadingText : normalText;
+    }
+
+    async function readJson(response) {
+      try {
+        return await response.json();
+      } catch (error) {
+        return {};
+      }
+    }
+
+    function responseErrorMessage(data, fallback) {
+      if (typeof data.detail === "string") {
+        return data.detail;
+      }
+      if (data.message) {
+        return data.message;
+      }
+      return fallback;
+    }
+
+    function renderAssumptions(extracted) {
+      const assumptions = Array.isArray(extracted?.assumptions) ? extracted.assumptions : [];
+      assumptionsList.innerHTML = "";
+
+      if (!assumptions.length) {
+        const item = document.createElement("li");
+        item.textContent = "No assumptions reported.";
+        assumptionsList.appendChild(item);
+        return;
+      }
+
+      for (const assumption of assumptions) {
+        const item = document.createElement("li");
+        item.textContent = assumption;
+        assumptionsList.appendChild(item);
+      }
+    }
+
+    async function extractParameters() {
+      showError("");
+      setButtonLoading(extractButton, true, "Extracting...", "Extract Parameters");
+
+      try {
+        const response = await fetch("/api/generate-vessel/extract", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: promptInput.value })
+        });
+        const data = await readJson(response);
+
+        if (!response.ok || !data.ok) {
+          throw new Error(responseErrorMessage(data, "Parameter extraction failed."));
+        }
+
+        currentToken = data.token;
+        currentExtracted = data.extracted;
+        reviewOutput.textContent = data.formatted_review || JSON.stringify(data.extracted, null, 2);
+        renderAssumptions(data.extracted);
+        outputFormat.value = "dwg";
+        generateButton.disabled = false;
+        setState("review");
+      } catch (error) {
+        showError(String(error.message || error));
+      } finally {
+        setButtonLoading(extractButton, false, "Extracting...", "Extract Parameters");
+      }
+    }
+
+    async function generateDrawing() {
+      showError("");
+
+      if (!currentToken) {
+        showError("This review token is no longer active. Extract parameters again.");
+        generateButton.disabled = true;
+        return;
+      }
+
+      setButtonLoading(generateButton, true, "Generating...", "Generate Drawing");
+
+      try {
+        const response = await fetch("/api/generate-vessel/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token: currentToken,
+            output_format: outputFormat.value
+          })
+        });
+        const data = await readJson(response);
+
+        if (!response.ok) {
+          throw new Error(responseErrorMessage(data, "Drawing generation failed."));
+        }
+
+        if (!data.ok) {
+          if (data.error_type === "autocad_not_running") {
+            currentToken = data.token || currentToken;
+            showError(data.message || "AutoCAD is not running. Start AutoCAD and retry.");
+            setState("review");
+            return;
+          }
+
+          currentToken = null;
+          generateButton.disabled = true;
+          showError(data.message || "Drawing generation failed. Extract parameters again.");
+          setState("review");
+          return;
+        }
+
+        currentToken = null;
+        currentExtracted = data.extracted || currentExtracted;
+        doneSummary.textContent = [
+          `Vessel: ${data.vessel_tag || currentExtracted?.tag || "Unknown"}`,
+          `Format: ${(data.format || outputFormat.value || "").toUpperCase()}`,
+          `Output: ${data.output_file || data.path || ""}`,
+          `Sheet: ${data.sheet || ""}`,
+          `Scale: ${data.scale || ""}`
+        ].filter(Boolean).join("\n");
+
+        downloadLink.href = data.download_url || "#";
+        if (data.download_url) {
+          downloadLink.setAttribute(
+            "download",
+            data.download_url.split("/").pop() || "drawing"
+          );
+        } else {
+          downloadLink.removeAttribute("download");
+        }
+        downloadLink.classList.toggle("hidden", !data.download_url);
+        setState("done");
+        loadHistory();
+      } catch (error) {
+        showError(String(error.message || error));
+      } finally {
+        setButtonLoading(generateButton, false, "Generating...", "Generate Drawing");
+        if (!currentToken && !doneState.classList.contains("hidden")) {
+          generateButton.disabled = false;
+        } else if (!currentToken) {
+          generateButton.disabled = true;
+        }
+      }
+    }
+
+    function resetFlow() {
+      currentToken = null;
+      currentExtracted = null;
+      showError("");
+      generateButton.disabled = false;
+      setState("input");
+      promptInput.focus();
+    }
+
+    function jobUseCase(job) {
+      return job.use_case || job.job_type || "";
+    }
+
+    function jobResult(job) {
+      return job.result_data || {};
+    }
+
+    function jobTag(job) {
+      const result = jobResult(job);
+      const extracted = result.extracted || job.ai_output?.extracted || {};
+      return result.vessel_tag || extracted.tag || "Vessel";
+    }
+
+    function jobFormat(job) {
+      const result = jobResult(job);
+      return (result.format || result.output_format || "").toString().toUpperCase();
+    }
+
+    function jobDownload(job) {
+      const result = jobResult(job);
+      return result.download_url || "";
+    }
+
+    function formatTime(value) {
+      if (!value) {
+        return "";
+      }
+
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        return value;
+      }
+      return date.toLocaleString();
+    }
+
+    async function loadHistory() {
+      try {
+        const response = await fetch("/api/jobs?limit=200");
+        const jobs = await readJson(response);
+        if (!Array.isArray(jobs)) {
+          throw new Error("History response was not a list.");
+        }
+
+        let generations = jobs.filter((job) => jobUseCase(job).startsWith("generate_vessel_confirm"));
+        const apiGenerations = generations.filter((job) => job.source === "api");
+        if (apiGenerations.length) {
+          generations = apiGenerations;
+        }
+        generations = generations.slice(0, 20);
+
+        historyList.innerHTML = "";
+        if (!generations.length) {
+          const empty = document.createElement("div");
+          empty.className = "history-item";
+          empty.textContent = "No vessel generations yet.";
+          historyList.appendChild(empty);
+          return;
+        }
+
+        for (const job of generations) {
+          const item = document.createElement("div");
+          item.className = "history-item";
+
+          const title = document.createElement("div");
+          title.className = "history-title";
+          title.textContent = jobTag(job);
+          item.appendChild(title);
+
+          const meta = document.createElement("div");
+          meta.className = "history-meta";
+          const format = jobFormat(job);
+          meta.textContent = [
+            formatTime(job.timestamp_start),
+            format || null,
+            job.status || null
+          ].filter(Boolean).join(" | ");
+          item.appendChild(meta);
+
+          const download = jobDownload(job);
+          if (download && job.status === "ok") {
+            const link = document.createElement("a");
+            link.className = "history-link";
+            link.href = download;
+            link.setAttribute("download", download.split("/").pop() || "drawing");
+            link.textContent = "Download";
+            item.appendChild(link);
+          }
+
+          historyList.appendChild(item);
+        }
+      } catch (error) {
+        historyList.innerHTML = "";
+        const item = document.createElement("div");
+        item.className = "history-item";
+        item.textContent = "Could not load history.";
+        historyList.appendChild(item);
+      }
+    }
+
+    extractButton.addEventListener("click", extractParameters);
+    generateButton.addEventListener("click", generateDrawing);
+    editButton.addEventListener("click", () => {
+      showError("");
+      setState("input");
+      promptInput.focus();
+    });
+    newVesselButton.addEventListener("click", resetFlow);
+    anotherButton.addEventListener("click", resetFlow);
+
+    setState("input");
+    loadHistory();
+  </script>
+</body>
+</html>

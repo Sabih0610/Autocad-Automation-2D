@@ -1,0 +1,65 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Environment / secrets
+.env
+.env.local
+.env.*
+!.env.example
+*.key
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Project outputs and generated artifacts
+outputs/
+backups/
+src/backups/
+ErrorReports/
+excel_hello.xlsx
+*.tmp
+*.temp
+
+# AutoCAD sidecar/temp files
+*.dwl
+*.dwl2
+*.sv$
+*.ac$
+*.idwlk
+*.bak
+*.tmp.dwg
+
+# Logs and local databases
+*.log
+uvicorn.*.log
+logs/
+jobs.db
+jobs.db-journal
+jobs.db-wal
+jobs.db-shm
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Optional frontend tooling caches
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
