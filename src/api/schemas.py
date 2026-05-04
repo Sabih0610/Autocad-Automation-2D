@@ -118,3 +118,63 @@ class PIDApproveRequest(BaseModel):
         default=None,
         description="Optional DWG path to open before execution. If omitted, active drawing is used.",
     )
+
+
+class CAD3DGenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str | None = Field(
+        default=None,
+        description="Optional natural-language 3D CAD request.",
+    )
+    drawing_style: str = Field(
+        default="simple clean 3D equipment layout",
+        description="Style instruction for the 3D CAD scene planner.",
+    )
+    example_name: str = Field(
+        default="simple_component_layout",
+        description=(
+            "Name of deterministic 3D component example to generate if prompt "
+            "is not provided or AI fallback is needed."
+        ),
+    )
+
+
+class CAD3DApproveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(..., description="Token returned by /api/cad3d/generate.")
+    save: bool = Field(
+        default=False,
+        description="Whether to save the active AutoCAD drawing after execution.",
+    )
+    target_dwg_path: str | None = Field(
+        default=None,
+        description="Optional DWG path to open before execution. If omitted, active drawing is used.",
+    )
+
+
+class CAD3DEditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(..., description="Natural-language CAD3D scene edit request.")
+    token: str | None = Field(
+        default=None,
+        description="Optional source CAD3D scene token. If omitted, latest scene state is used.",
+    )
+    execute: bool = Field(
+        default=False,
+        description="When true, execute the edited scene into AutoCAD after storing it.",
+    )
+    save: bool = Field(
+        default=False,
+        description="Whether to save the active AutoCAD drawing after edited-scene execution.",
+    )
+    target_dwg_path: str | None = Field(
+        default=None,
+        description="Optional DWG path to open before edited-scene execution.",
+    )
+    create_new_token: bool = Field(
+        default=True,
+        description="When true, store the edited scene under a new token.",
+    )

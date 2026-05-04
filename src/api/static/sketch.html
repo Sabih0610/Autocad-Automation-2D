@@ -405,8 +405,17 @@
     const newSketchButton = document.getElementById("new-sketch");
     const recentList = document.getElementById("recent-list");
     const RECENT_KEY = "autocad_ai_recent_sketches";
+    const CAD3D_TOKEN_KEY = "autocad_ai_latest_cad3d_token";
 
     let isSending = false;
+    let latestGeneration = null;
+    let latestCAD3DToken = null;
+
+    try {
+      latestCAD3DToken = localStorage.getItem(CAD3D_TOKEN_KEY) || null;
+    } catch (error) {
+      latestCAD3DToken = null;
+    }
 
     function escapeText(value) {
       const div = document.createElement("div");
@@ -445,17 +454,23 @@
     }
 
     const CHAT_ROUTES = {
+      CAD3D: "cad3d_generate",
+      CAD3D_EDIT: "cad3d_edit",
       PID: "pid_generate",
       SKETCH: "sketch_generate",
       EDIT: "autocad_edit"
     };
 
-    function normalizeForRouting(text) {
+    function normalizePrompt(text) {
       return String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
     }
 
+    function normalizeForRouting(text) {
+      return normalizePrompt(text);
+    }
+
     function isNewDrawingRequest(text) {
-      const normalized = normalizeForRouting(text);
+      const normalized = normalizePrompt(text);
 
       const createWords = [
         "draw ",
@@ -471,8 +486,58 @@
       return createWords.some((word) => normalized.startsWith(word));
     }
 
+    const THREE_D_INTENT_PATTERNS = [
+      /\b3d\b/,
+      /\b3-d\b/,
+      /\b3 dimensional\b/,
+      /\b3-dimensional\b/,
+      /\bthree dimensional\b/,
+      /\bthree-dimensional\b/,
+      /\bsolid model\b/,
+      /\bisometric model\b/
+    ];
+
+    const NEGATED_3D_PATTERNS = [
+      /\bnot\s+(?:a\s+|an\s+)?(?:3d|3-d|3 dimensional|3-dimensional|three dimensional|three-dimensional|solid model|isometric model)\b/,
+      /\bno\s+(?:3d|3-d|3 dimensional|3-dimensional|three dimensional|three-dimensional|solid model|isometric model)\b/,
+      /\b(?:do not|don't|dont)\s+(?:create|make|generate|build|draw|use|include)?\s*(?:a\s+|an\s+)?(?:3d|3-d|3 dimensional|3-dimensional|three dimensional|three-dimensional|solid model|isometric model)\b/,
+      /\b(?:2d|2-d)\s*,?\s*not\s+(?:a\s+|an\s+)?(?:3d|3-d|3 dimensional|3-dimensional|three dimensional|three-dimensional|solid model|isometric model)\b/,
+      /\b(?:3d|3-d|3 dimensional|3-dimensional|three dimensional|three-dimensional|solid model|isometric model)\s+(?:is\s+)?not\b/
+    ];
+
+    const TWO_D_INTENT_PATTERNS = [
+      /\b2d\b/,
+      /\b2-d\b/,
+      /\btwo dimensional\b/,
+      /\btwo-dimensional\b/,
+      /\bflat\b/,
+      /\bflat diagram\b/,
+      /\b2d drawing\b/,
+      /\b2d process layout\b/,
+      /\b2d autocad drawing\b/
+    ];
+
+    function hasNegated3DIntent(text) {
+      const normalized = normalizePrompt(text);
+      return NEGATED_3D_PATTERNS.some((pattern) => pattern.test(normalized));
+    }
+
+    function hasExplicit3DIntent(text) {
+      const normalized = normalizePrompt(text);
+      return THREE_D_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
+    }
+
+    function hasExplicit2DIntent(text) {
+      const normalized = normalizePrompt(text);
+      return TWO_D_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
+    }
+
+    function is3DRequest(text) {
+      return hasExplicit3DIntent(text) && !hasNegated3DIntent(text);
+    }
+
     function isPIDRequest(text) {
-      const normalized = normalizeForRouting(text);
+      const normalized = normalizePrompt(text);
 
       const strongPIDSignals = [
         "p&id",
@@ -541,7 +606,7 @@
         return false;
       }
 
-      const normalized = normalizeForRouting(text);
+      const normalized = normalizePrompt(text);
 
       const directEditVerbs = [
         "delete",
@@ -598,21 +663,119 @@
       return startsWithDirectEditVerb || (hasContextEditVerb && hasExistingContext);
     }
 
-    function decideChatRoute(text) {
-      const newDrawingRequest = isNewDrawingRequest(text);
-      const pidRequest = isPIDRequest(text);
-      const editRequest = isEditRequest(text);
+    const CAD3D_EDIT_VERBS = [
+      "move",
+      "shift",
+      "relocate",
+      "change",
+      "set",
+      "update",
+      "resize",
+      "increase",
+      "decrease",
+      "delete",
+      "remove",
+      "add",
+      "place",
+      "lengthen",
+      "shorten"
+    ];
 
-      if (newDrawingRequest && pidRequest) {
-        return CHAT_ROUTES.PID;
+    const CAD3D_EQUIPMENT_TERMS = [
+      "pump",
+      "tank",
+      "vessel",
+      "separator",
+      "heat exchanger",
+      "exchanger",
+      "valve",
+      "flange",
+      "support",
+      "support leg",
+      "support legs",
+      "skid",
+      "nozzle",
+      "pipe",
+      "routed pipe"
+    ];
+
+    const CAD3D_COMPONENT_ID_PATTERN = /\b[A-Z]{1,4}-?\d{2,4}[A-Z]?\b/i;
+
+    function latestGenerationIsCAD3D() {
+      const generation = typeof latestGeneration !== "undefined" ? latestGeneration : null;
+      if (!generation) {
+        return false;
       }
 
+      return (
+        String(generation.type || "").toLowerCase() === "cad3d" ||
+        String(generation.approveUrl || "").includes("/api/cad3d/approve") ||
+        String(generation.editUrl || "").includes("/api/cad3d/edit")
+      );
+    }
+
+    function hasCAD3DContext() {
+      const token = typeof latestCAD3DToken !== "undefined" ? latestCAD3DToken : null;
+      return latestGenerationIsCAD3D() || Boolean(token);
+    }
+
+    function hasCAD3DEditIntent(text) {
+      const normalized = normalizePrompt(text);
+      if (!normalized) {
+        return false;
+      }
+
+      const hasEditVerb = CAD3D_EDIT_VERBS.some((verb) => {
+        return normalized === verb || normalized.startsWith(`${verb} `) || normalized.includes(` ${verb} `);
+      });
+      if (!hasEditVerb) {
+        return false;
+      }
+
+      const hasComponentId = CAD3D_COMPONENT_ID_PATTERN.test(String(text || ""));
+      const hasEquipmentTerm = CAD3D_EQUIPMENT_TERMS.some((term) => normalized.includes(term));
+      const explicit3DContext = is3DRequest(text);
+
+      return hasComponentId || hasEquipmentTerm || explicit3DContext;
+    }
+
+    function shouldRouteToCAD3DEdit(text) {
+      if (isNewDrawingRequest(text)) {
+        return false;
+      }
+      if (hasExplicit2DIntent(text)) {
+        return false;
+      }
+      return hasCAD3DContext() && hasCAD3DEditIntent(text);
+    }
+
+    function decideChatRoute(text) {
+      const newDrawingRequest = isNewDrawingRequest(text);
+      const cad3dRequest = is3DRequest(text);
+      const pidRequest = isPIDRequest(text);
+      const cad3dEditRequest = shouldRouteToCAD3DEdit(text);
+      const editRequest = isEditRequest(text);
+
       if (newDrawingRequest) {
+        if (cad3dRequest) {
+          return CHAT_ROUTES.CAD3D;
+        }
+        if (pidRequest) {
+          return CHAT_ROUTES.PID;
+        }
         return CHAT_ROUTES.SKETCH;
+      }
+
+      if (cad3dEditRequest) {
+        return CHAT_ROUTES.CAD3D_EDIT;
       }
 
       if (editRequest) {
         return CHAT_ROUTES.EDIT;
+      }
+
+      if (cad3dRequest) {
+        return CHAT_ROUTES.CAD3D;
       }
 
       if (pidRequest) {
@@ -762,6 +925,127 @@
       `;
     }
 
+    function cad3dDetailsHtml(data) {
+      const assumptions = Array.isArray(data.assumptions) ? data.assumptions : [];
+      const componentTypes = Array.isArray(data.component_types) ? data.component_types : [];
+      const diagnostics = [];
+
+      if (data.fallback_example_name) {
+        diagnostics.push(`Fallback example: ${data.fallback_example_name}`);
+      }
+      if (data.ai_planner_error_type) {
+        diagnostics.push(`AI planner error type: ${data.ai_planner_error_type}`);
+      }
+      if (data.ai_planner_error) {
+        diagnostics.push(`AI planner error: ${data.ai_planner_error}`);
+      }
+      if (data.fallback_reason) {
+        diagnostics.push(`Fallback reason: ${data.fallback_reason}`);
+      }
+
+      const assumptionItems = assumptions.length
+        ? assumptions.map((item) => `<li>${escapeText(item)}</li>`).join("")
+        : "<li>None</li>";
+      const typeItems = componentTypes.length
+        ? componentTypes.map((item) => `<li>${escapeText(item)}</li>`).join("")
+        : "<li>None</li>";
+      const diagnosticItems = diagnostics.length
+        ? diagnostics.map((item) => `<li>${escapeText(item)}</li>`).join("")
+        : "<li>None</li>";
+
+      return `
+        <details>
+          <summary>Details</summary>
+          <div class="meta-grid">
+            <div class="meta-row"><strong>Assumptions</strong></div>
+            <ul>${assumptionItems}</ul>
+            <div class="meta-row"><strong>Component types</strong></div>
+            <ul>${typeItems}</ul>
+            <div class="meta-row"><strong>Diagnostics</strong></div>
+            <ul>${diagnosticItems}</ul>
+          </div>
+        </details>
+      `;
+    }
+
+    function cad3dPlanMessageHtml(data) {
+      const componentTypes = Array.isArray(data.component_types)
+        ? data.component_types.join(", ")
+        : "";
+      const fallbackLine = data.fallback_used
+        ? `<div class="meta-row"><strong>Fallback example:</strong> ${escapeText(data.fallback_example_name || "simple_component_layout")}</div>`
+        : "";
+
+      return `
+        <div class="message-title">3D CAD component plan created.</div>
+        <div class="meta-grid">
+          <div class="meta-row"><strong>Title:</strong> ${escapeText(data.title || "3D CAD model")}</div>
+          <div class="meta-row"><strong>Strategy:</strong> ${escapeText(data.generation_strategy || "unknown")}</div>
+          <div class="meta-row"><strong>Fallback:</strong> ${data.fallback_used ? "yes" : "no"}</div>
+          ${fallbackLine}
+          <div class="meta-row"><strong>Components:</strong> ${escapeText(data.component_count)}</div>
+          <div class="meta-row"><strong>Types:</strong> ${escapeText(componentTypes || "unspecified")}</div>
+          <div class="meta-row">Ready to build in AutoCAD.</div>
+        </div>
+        ${cad3dDetailsHtml(data)}
+        <div class="actions">
+          <button class="build-button" type="button">Build 3D model in AutoCAD</button>
+        </div>
+      `;
+    }
+
+    function cad3dBuildResultHtml(data) {
+      const result = data.execution_result || {};
+      return `
+        <div class="message-title">Done — 3D model built in AutoCAD.</div>
+        <div class="meta-grid">
+          <div class="meta-row"><strong>Document:</strong> ${escapeText(result.document_name || "active drawing")}</div>
+          <div class="meta-row"><strong>Executed:</strong> ${escapeText(result.executed_count ?? "")}/${escapeText(result.total_count ?? "")} components</div>
+          <div class="meta-row"><strong>Entities:</strong> ${escapeText(result.entity_count_before ?? "unknown")} → ${escapeText(result.entity_count_after ?? "unknown")}</div>
+          <div class="meta-row"><strong>Zoom extents:</strong> ${result.zoom_extents_called ? "yes" : "no"}</div>
+          ${result.zoom_error ? `<div class="meta-row"><strong>Zoom note:</strong> ${escapeText(result.zoom_error)}</div>` : ""}
+        </div>
+      `;
+    }
+
+    function cad3dEditResultHtml(data) {
+      const result = data.execution_result || {};
+      const summary = data.edit_summary || {};
+      const plan = data.edit_plan || {};
+      const operations = Array.isArray(plan.operations) ? plan.operations : [];
+      const operationText = operations.length
+        ? operations.map((operation) => {
+            const componentId = operation.component_id || operation.component?.id || "";
+            return `${operation.operation_type || "operation"}${componentId ? ` ${componentId}` : ""}`;
+          }).join(", ")
+        : "edit operation";
+      const statusLine = data.scene_status
+        ? `<div class="meta-row"><strong>Scene status:</strong> ${escapeText(data.scene_status)}</div>`
+        : "";
+      const executionLine = data.executed
+        ? `<div class="meta-row"><strong>Executed:</strong> ${escapeText(result.executed_count ?? "")}/${escapeText(result.total_count ?? "")} components</div>`
+        : `<div class="meta-row"><strong>Executed:</strong> no</div>`;
+      const documentLine = data.executed
+        ? `<div class="meta-row"><strong>Document:</strong> ${escapeText(result.document_name || "active drawing")}</div>`
+        : "";
+      const pipeLine = result.pipe_connections_expanded != null
+        ? `<div class="meta-row"><strong>Routed pipes expanded:</strong> ${escapeText(result.pipe_connections_expanded)}</div>`
+        : "";
+
+      return `
+        <div class="message-title">CAD3D edit applied.</div>
+        <div class="meta-grid">
+          <div class="meta-row"><strong>Edit:</strong> ${escapeText(plan.summary || operationText)}</div>
+          <div class="meta-row"><strong>Edited scene token:</strong> ${escapeText(data.edited_token || "")}</div>
+          <div class="meta-row"><strong>Components:</strong> ${escapeText(summary.original_component_count ?? "")} → ${escapeText(summary.edited_component_count ?? data.component_count ?? "")}</div>
+          ${statusLine}
+          ${documentLine}
+          ${executionLine}
+          ${pipeLine}
+        </div>
+      `;
+    }
+
     function editDetailsHtml(data) {
       const plan = data.edit_plan || {};
       const assumptions = Array.isArray(plan.assumptions) ? plan.assumptions : [];
@@ -857,6 +1141,40 @@
       return fallback;
     }
 
+    function setLatestCAD3DToken(token) {
+      latestCAD3DToken = token || null;
+      try {
+        if (latestCAD3DToken) {
+          localStorage.setItem(CAD3D_TOKEN_KEY, latestCAD3DToken);
+        } else {
+          localStorage.removeItem(CAD3D_TOKEN_KEY);
+        }
+      } catch (error) {
+        // Local storage is best-effort routing state only.
+      }
+    }
+
+    function currentCAD3DToken() {
+      if (latestGenerationIsCAD3D() && latestGeneration?.token) {
+        return latestGeneration.token;
+      }
+      return latestCAD3DToken;
+    }
+
+    async function fetchLatestCAD3DToken() {
+      const response = await fetch("/api/cad3d/state/latest", {
+        method: "GET"
+      });
+      const data = await readJson(response);
+
+      if (!response.ok || !data.ok || !data.record?.token) {
+        throw new Error("No stored CAD3D scene is available to edit. Generate a 3D model first.");
+      }
+
+      setLatestCAD3DToken(data.record.token);
+      return data.record.token;
+    }
+
     function editApiErrorMessage(response, data) {
       if (response.status === 503) {
         return "I could not apply that edit because AutoCAD is not reachable. Open AutoCAD with an active drawing and try again.";
@@ -875,6 +1193,22 @@
       }
 
       return errorMessage(data, "I could not apply that edit.");
+    }
+
+    function cad3dEditApiErrorMessage(response, data) {
+      if (response.status === 503) {
+        return "I could not rebuild the edited 3D model because AutoCAD is not reachable. Open AutoCAD with an active drawing and try again.";
+      }
+      if (response.status === 404) {
+        return "I could not find a stored CAD3D scene to edit. Generate a 3D model first.";
+      }
+      if (response.status === 400) {
+        return `I could not apply that CAD3D component edit. ${errorMessage(data, "")}`.trim();
+      }
+      if (response.status >= 500) {
+        return `The backend hit an error while rebuilding the edited CAD3D scene. ${errorMessage(data, "")}`.trim();
+      }
+      return errorMessage(data, "I could not apply that CAD3D edit.");
     }
 
     function setSending(value) {
@@ -929,6 +1263,7 @@
     }
 
     async function generatePlan(prompt) {
+      latestGeneration = null;
       const status = createMessage("system", "Generating command plan...");
 
       const response = await fetch("/api/sketch/generate", {
@@ -948,6 +1283,11 @@
       }
 
       data.route_type = CHAT_ROUTES.SKETCH;
+      latestGeneration = {
+        token: data.token,
+        type: "sketch",
+        approveUrl: "/api/sketch/approve"
+      };
       status.textContent = "Plan generated. Review it before building in AutoCAD.";
       const planBubble = createMessage("assistant", planMessageHtml(data), { html: true });
       const buildButton = planBubble.querySelector(".build-button");
@@ -1013,6 +1353,7 @@
     }
 
     async function handlePIDRequest(prompt) {
+      latestGeneration = null;
       const status = createMessage("system", "Planning P&ID using reusable components...");
 
       try {
@@ -1032,6 +1373,11 @@
         }
 
         data.route_type = CHAT_ROUTES.PID;
+        latestGeneration = {
+          token: data.token,
+          type: "pid",
+          approveUrl: "/api/pid/approve"
+        };
         status.textContent = "P&ID plan generated. Review it before building in AutoCAD.";
         const planBubble = createMessage("assistant", pidPlanMessageHtml(data), { html: true });
         const buildButton = planBubble.querySelector(".build-button");
@@ -1099,6 +1445,170 @@
       }
     }
 
+    async function handleCAD3DRequest(prompt) {
+      latestGeneration = null;
+      const status = createMessage("system", "Planning 3D CAD model using reusable 3D components...");
+
+      try {
+        const response = await fetch("/api/cad3d/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt,
+            drawing_style: "simple clean 3D equipment layout with readable labels"
+          })
+        });
+        const data = await readJson(response);
+
+        if (!response.ok || !data.ok) {
+          status.textContent = "3D CAD planning failed.";
+          throw new Error(`I could not generate the 3D CAD component plan. ${errorMessage(data, "")}`.trim());
+        }
+
+        data.route_type = CHAT_ROUTES.CAD3D;
+        setLatestCAD3DToken(data.token);
+        latestGeneration = {
+          token: data.token,
+          type: "cad3d",
+          approveUrl: "/api/cad3d/approve",
+          editUrl: "/api/cad3d/edit"
+        };
+        status.textContent = "3D CAD plan generated. Review it before building in AutoCAD.";
+        const planBubble = createMessage("assistant", cad3dPlanMessageHtml(data), { html: true });
+        const buildButton = planBubble.querySelector(".build-button");
+
+        buildButton.addEventListener("click", () => buildCAD3DInAutoCAD(data, buildButton));
+
+        saveRecent({
+          prompt,
+          summary: data.title,
+          verdict: data.fallback_used ? `3d ${data.fallback_example_name || "fallback"}` : "3d planned",
+          time: new Date().toLocaleString()
+        });
+      } catch (error) {
+        latestGeneration = null;
+        createMessage("assistant", String(error.message || error), { error: true });
+      }
+    }
+
+    async function buildCAD3DInAutoCAD(plan, button) {
+      button.disabled = true;
+      button.textContent = "Building 3D model...";
+
+      const status = createMessage(
+        "system",
+        "Connecting to AutoCAD...\nExecuting 3D CAD components...\nZooming to generated model..."
+      );
+
+      try {
+        const response = await fetch("/api/cad3d/approve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token: plan.token,
+            save: false,
+            target_dwg_path: null
+          })
+        });
+        const data = await readJson(response);
+
+        if (response.status === 503) {
+          status.textContent = "AutoCAD is not running or no active drawing is open. Open AutoCAD and try Build again.";
+          button.disabled = false;
+          button.textContent = "Build 3D model in AutoCAD";
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(errorMessage(data, "Could not build the 3D model in AutoCAD."));
+        }
+
+        if (!data.ok) {
+          status.textContent = "AutoCAD reported execution issues while building the 3D model.";
+          createMessage("assistant", cad3dBuildResultHtml(data), { html: true, error: true });
+          button.disabled = false;
+          button.textContent = "Build 3D model in AutoCAD";
+          return;
+        }
+
+        setLatestCAD3DToken(plan.token);
+        latestGeneration = {
+          token: plan.token,
+          type: "cad3d",
+          approveUrl: "/api/cad3d/approve",
+          editUrl: "/api/cad3d/edit"
+        };
+        status.textContent = "Done.";
+        createMessage("assistant", cad3dBuildResultHtml(data), { html: true });
+      } catch (error) {
+        status.textContent = "3D build failed.";
+        createMessage("assistant", String(error.message || error), { error: true });
+        button.disabled = false;
+        button.textContent = "Build 3D model in AutoCAD";
+      }
+    }
+
+    async function handleCAD3DEditRequest(prompt) {
+      const status = createMessage("system", "Planning CAD3D component edit...");
+
+      try {
+        let sourceToken = currentCAD3DToken();
+        if (!sourceToken) {
+          status.textContent = "Looking up the latest stored CAD3D scene...";
+          sourceToken = await fetchLatestCAD3DToken();
+        }
+
+        status.textContent = "Applying CAD3D component edit and rebuilding the 3D model...";
+
+        const response = await fetch("/api/cad3d/edit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt,
+            token: sourceToken,
+            execute: true,
+            save: false,
+            target_dwg_path: null,
+            create_new_token: true
+          })
+        });
+        const data = await readJson(response);
+
+        if (!response.ok) {
+          status.textContent = "CAD3D edit failed.";
+          throw new Error(cad3dEditApiErrorMessage(response, data));
+        }
+
+        if (data.edited_token) {
+          setLatestCAD3DToken(data.edited_token);
+          latestGeneration = {
+            token: data.edited_token,
+            type: "cad3d",
+            approveUrl: "/api/cad3d/approve",
+            editUrl: "/api/cad3d/edit"
+          };
+        }
+
+        if (!data.ok) {
+          status.textContent = "CAD3D edit ran, but AutoCAD reported issues.";
+          createMessage("assistant", cad3dEditResultHtml(data), { html: true, error: true });
+        } else {
+          const documentName = data.execution_result?.document_name || "the active drawing";
+          status.textContent = `Done — rebuilt ${documentName}.`;
+          createMessage("assistant", cad3dEditResultHtml(data), { html: true });
+        }
+
+        saveRecent({
+          prompt,
+          summary: data.edit_plan?.summary,
+          verdict: data.ok ? "cad3d edited" : "cad3d edit issues",
+          time: new Date().toLocaleString()
+        });
+      } catch (error) {
+        createMessage("assistant", String(error.message || error), { error: true });
+      }
+    }
+
     async function applyLiveEdit(prompt) {
       const status = createMessage("system", "Inspecting active AutoCAD drawing...");
 
@@ -1155,17 +1665,31 @@
 
       try {
         const newDrawingRequest = isNewDrawingRequest(prompt);
+        const cad3dRequest = is3DRequest(prompt);
         const pidRequest = isPIDRequest(prompt);
+        const cad3dContext = hasCAD3DContext();
+        const cad3dEditIntent = hasCAD3DEditIntent(prompt);
+        const cad3dEditRoute = shouldRouteToCAD3DEdit(prompt);
         const editRequest = isEditRequest(prompt);
 
         console.log("Routing message:", prompt);
         console.log("isNewDrawingRequest:", newDrawingRequest);
+        console.log("is3DRequest:", cad3dRequest);
         console.log("isPIDRequest:", pidRequest);
+        console.log("hasCAD3DContext:", cad3dContext);
+        console.log("hasCAD3DEditIntent:", cad3dEditIntent);
+        console.log("shouldRouteToCAD3DEdit:", cad3dEditRoute);
         console.log("isEditRequest:", editRequest);
         const route = decideChatRoute(prompt);
         console.log("decideChatRoute:", route);
 
-        if (route === CHAT_ROUTES.PID) {
+        if (route === CHAT_ROUTES.CAD3D) {
+          console.log("Route selected: CAD3D");
+          await handleCAD3DRequest(prompt);
+        } else if (route === CHAT_ROUTES.CAD3D_EDIT) {
+          console.log("Route selected: CAD3D_EDIT");
+          await handleCAD3DEditRequest(prompt);
+        } else if (route === CHAT_ROUTES.PID) {
           console.log("Route selected: PID");
           await handlePIDRequest(prompt);
         } else if (route === CHAT_ROUTES.EDIT) {
@@ -1192,6 +1716,7 @@
     });
 
     newSketchButton.addEventListener("click", () => {
+      latestGeneration = null;
       messages.innerHTML = "";
       promptInput.value = "";
       promptInput.focus();

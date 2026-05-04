@@ -6,6 +6,7 @@ from src.framework.autocad import inspector
 from src.framework.autocad.inspector import (
     DrawingInspectionError,
     _to_xyz,
+    get_model_space_block,
     inspect_active_drawing,
     inspect_entity,
     summarize_drawing_state,
@@ -44,11 +45,39 @@ class FakeModelSpace:
         return self.entities[index]
 
 
+class FakeBlocks:
+    def __init__(self, modelspace=None, error: Exception | None = None):
+        self.modelspace = modelspace
+        self.error = error
+        self.item_calls = []
+
+    def Item(self, name):
+        self.item_calls.append(name)
+        if self.error is not None:
+            raise self.error
+        if name != "*Model_Space":
+            raise KeyError(name)
+        return self.modelspace
+
+
 class FakeDocument:
     def __init__(self, entities):
         self.Name = "Drawing10.dwg"
         self.FullName = r"C:\Drawings\Drawing10.dwg"
         self.ModelSpace = FakeModelSpace(entities)
+        self.Blocks = FakeBlocks(self.ModelSpace)
+
+
+class FakeDocumentModelSpaceFails:
+    def __init__(self, entities, blocks_error: Exception | None = None):
+        self.Name = "Drawing10.dwg"
+        self.FullName = r"C:\Drawings\Drawing10.dwg"
+        self.fallback_modelspace = FakeModelSpace(entities)
+        self.Blocks = FakeBlocks(self.fallback_modelspace, error=blocks_error)
+
+    @property
+    def ModelSpace(self):
+        raise AttributeError("<unknown>.ModelSpace")
 
 
 class FakeAcad:
@@ -193,6 +222,51 @@ def test_inspect_active_drawing_returns_document_metadata(fake_com) -> None:
     assert result["entity_count_total"] == 3
     assert result["entity_count_returned"] == 3
     assert result["truncated"] is False
+
+
+def test_get_model_space_block_uses_doc_modelspace_when_available(fake_com) -> None:
+    assert get_model_space_block(fake_com) is fake_com.ModelSpace
+
+
+def test_inspector_falls_back_to_blocks_model_space_when_doc_modelspace_fails(monkeypatch) -> None:
+    entities = [
+        FakeEntity(
+            Handle="20",
+            ObjectName="AcDbText",
+            Layer="TEXT",
+            TextString="Fallback Title",
+            InsertionPoint=(0, 0, 0),
+        )
+    ]
+    doc = FakeDocumentModelSpaceFails(entities)
+    monkeypatch.setattr(inspector, "_get_acad", lambda: FakeAcad(doc))
+    monkeypatch.setattr(
+        inspector,
+        "_com_retry",
+        lambda operation, description, attempts=5, delay_seconds=0.5: operation(),
+    )
+
+    result = inspect_active_drawing()
+
+    assert doc.Blocks.item_calls == ["*Model_Space"]
+    assert result["entity_count_total"] == 1
+    assert result["entities"][0]["text"] == "Fallback Title"
+
+
+def test_get_model_space_block_raises_when_both_paths_fail(monkeypatch) -> None:
+    doc = FakeDocumentModelSpaceFails([], blocks_error=AttributeError("Blocks.Item failed"))
+    monkeypatch.setattr(
+        inspector,
+        "_com_retry",
+        lambda operation, description, attempts=5, delay_seconds=0.5: operation(),
+    )
+
+    with pytest.raises(DrawingInspectionError) as exc_info:
+        get_model_space_block(doc)
+
+    message = str(exc_info.value)
+    assert "doc.ModelSpace failed with AttributeError" in message
+    assert 'doc.Blocks.Item("*Model_Space") failed with AttributeError' in message
 
 
 def test_inspect_active_drawing_respects_max_entities(fake_com) -> None:

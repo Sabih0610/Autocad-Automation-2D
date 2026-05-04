@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.api.routes.autocad_edit import router as autocad_edit_router
 from src.api.routes.autocad_inspect import router as autocad_inspect_router
+from src.api.routes.cad3d import router as cad3d_router
 from src.api.routes.consistency import router as consistency_router
 from src.api.routes.line_list import router as line_list_router
 from src.api.routes.pid import router as pid_router
@@ -39,6 +40,9 @@ AUDIT_ROUTE_MAP = {
     "/api/autocad/edit": "autocad_edit",
     "/api/pid/generate": "pid_generate",
     "/api/pid/approve": "pid_approve",
+    "/api/cad3d/generate": "cad3d_generate",
+    "/api/cad3d/edit": "cad3d_edit",
+    "/api/cad3d/approve": "cad3d_approve",
 }
 CURRENT_AUDIT_JOB_ID: ContextVar[str | None] = ContextVar("current_audit_job_id", default=None)
 CURRENT_AUDIT_COMPLETED: ContextVar[bool] = ContextVar("current_audit_completed", default=False)
@@ -58,6 +62,7 @@ app.include_router(sketch_router)
 app.include_router(autocad_inspect_router)
 app.include_router(autocad_edit_router)
 app.include_router(pid_router)
+app.include_router(cad3d_router)
 
 
 def _truncate_payload(payload: Any) -> Any:

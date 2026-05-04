@@ -21,6 +21,32 @@ class DrawingInspectionError(Exception):
     """Raised when the active drawing cannot be inspected."""
 
 
+def get_model_space_block(doc):
+    """Return the AutoCAD ModelSpace collection/block with a COM fallback."""
+    modelspace_error: str | None = None
+    block_error: str | None = None
+
+    try:
+        return _com_retry(lambda: doc.ModelSpace, "getting model space")
+    except Exception as exc:
+        modelspace_error = f"{type(exc).__name__}: {exc}"
+
+    try:
+        blocks = _com_retry(lambda: doc.Blocks, "getting blocks collection")
+        return _com_retry(
+            lambda: blocks.Item("*Model_Space"),
+            'getting Blocks.Item("*Model_Space")',
+        )
+    except Exception as exc:
+        block_error = f"{type(exc).__name__}: {exc}"
+
+    raise DrawingInspectionError(
+        "Failed to read ModelSpace. "
+        f"doc.ModelSpace failed with {modelspace_error}. "
+        f'doc.Blocks.Item("*Model_Space") failed with {block_error}.'
+    )
+
+
 def _safe_get(obj: Any, attr: str, default=None):
     """Best-effort COM property read."""
     try:
@@ -221,12 +247,7 @@ def inspect_active_drawing(max_entities: int = 500) -> dict:
     if doc is None:
         raise DrawingInspectionError("No active AutoCAD document is available.")
 
-    try:
-        msp = _com_retry(lambda: doc.ModelSpace, "getting model space")
-    except Exception as exc:
-        raise DrawingInspectionError(
-            f"Failed to read ModelSpace: {type(exc).__name__}: {exc}"
-        ) from exc
+    msp = get_model_space_block(doc)
 
     total_count = _safe_modelspace_count(msp)
     entities = [

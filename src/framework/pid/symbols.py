@@ -17,13 +17,27 @@ PID_LAYER_TEXT = "PID_TEXT"
 PID_LAYER_SIGNAL = "PID_SIGNAL"
 PID_LAYER_FLOW = "PID_FLOW"
 
-PID_TEXT_HEIGHT_NORMAL = 70
-PID_TEXT_HEIGHT_SMALL = 45
-PID_TEXT_HEIGHT_TITLE = 110
+# AutoCAD ACI colors for presentation/demo output.
+# 1 red, 2 yellow, 3 green, 4 cyan, 5 blue, 6 magenta,
+# 7 white/black foreground, 8 gray, 9 light gray, 30 orange-ish.
+PID_COLOR_EQUIPMENT = 4      # cyan / blue-style equipment
+PID_COLOR_PIPING = 3         # green piping
+PID_COLOR_VALVES = 6         # magenta valves
+PID_COLOR_INSTRUMENTS = 2    # yellow instruments
+PID_COLOR_TEXT = 7           # white / foreground text
+PID_COLOR_SIGNAL = 8         # gray signal/controller lines
+PID_COLOR_FLOW = 30          # orange-ish flow arrows
+
+# Presentation-friendly text sizing.
+PID_TEXT_HEIGHT_NORMAL = 85
+PID_TEXT_HEIGHT_SMALL = 55
+PID_TEXT_HEIGHT_TITLE = 150
 PID_INSTRUMENT_RADIUS = 85
 PID_VALVE_SIZE = 120
 PID_PIPE_LABEL_OFFSET = 140
-PID_EQUIPMENT_TAG_HEIGHT = 90
+
+# Keep equipment tags readable without dominating the drawing.
+PID_EQUIPMENT_TAG_HEIGHT = 70
 
 
 def _xy(point: list[float]) -> tuple[float, float]:
@@ -56,20 +70,58 @@ def _estimated_text_width(text: str, height: float) -> float:
 
 
 def _equipment_tag_height(size: float) -> float:
-    minimum = PID_EQUIPMENT_TAG_HEIGHT * 2.0 / 3.0
-    maximum = PID_EQUIPMENT_TAG_HEIGHT + 30.0
-    return min(max(float(size) * 0.16, minimum), maximum)
+    """Return a controlled tag height for equipment tags.
+
+    The previous sizing could make tags very large on big equipment. This keeps
+    the output more suitable for demo videos and client presentation screenshots.
+    """
+    minimum = PID_EQUIPMENT_TAG_HEIGHT * 0.65
+    maximum = PID_EQUIPMENT_TAG_HEIGHT + 10.0
+    return min(max(float(size) * 0.12, minimum), maximum)
 
 
 def pid_standard_layers() -> list[dict]:
+    """Return standard colored P&ID layers.
+
+    The Mode 2 command executor supports the ``color`` key on LAYER commands,
+    so new P&ID drawings will use presentation colors automatically.
+    """
     return [
-        {"command": "LAYER", "layer_name": PID_LAYER_EQUIPMENT},
-        {"command": "LAYER", "layer_name": PID_LAYER_PIPING},
-        {"command": "LAYER", "layer_name": PID_LAYER_VALVES},
-        {"command": "LAYER", "layer_name": PID_LAYER_INSTRUMENTS},
-        {"command": "LAYER", "layer_name": PID_LAYER_TEXT},
-        {"command": "LAYER", "layer_name": PID_LAYER_SIGNAL},
-        {"command": "LAYER", "layer_name": PID_LAYER_FLOW},
+        {
+            "command": "LAYER",
+            "layer_name": PID_LAYER_EQUIPMENT,
+            "color": PID_COLOR_EQUIPMENT,
+        },
+        {
+            "command": "LAYER",
+            "layer_name": PID_LAYER_PIPING,
+            "color": PID_COLOR_PIPING,
+        },
+        {
+            "command": "LAYER",
+            "layer_name": PID_LAYER_VALVES,
+            "color": PID_COLOR_VALVES,
+        },
+        {
+            "command": "LAYER",
+            "layer_name": PID_LAYER_INSTRUMENTS,
+            "color": PID_COLOR_INSTRUMENTS,
+        },
+        {
+            "command": "LAYER",
+            "layer_name": PID_LAYER_TEXT,
+            "color": PID_COLOR_TEXT,
+        },
+        {
+            "command": "LAYER",
+            "layer_name": PID_LAYER_SIGNAL,
+            "color": PID_COLOR_SIGNAL,
+        },
+        {
+            "command": "LAYER",
+            "layer_name": PID_LAYER_FLOW,
+            "color": PID_COLOR_FLOW,
+        },
     ]
 
 
@@ -108,16 +160,29 @@ def horizontal_vessel_commands(
     right_x = cx + float(length) / 2.0
     top_y = cy + radius
     bottom_y = cy - radius
+
     tag_height = _equipment_tag_height(diameter)
     tag_width = _estimated_text_width(tag, tag_height)
     tag_x = cx - tag_width / 2.0
     tag_y = cy + float(diameter) * 0.12
+
+    # If the tag would be too large inside the vessel, place it above.
     if tag_width > float(length) * 0.65 or tag_height > float(diameter) * 0.35:
         tag_y = top_y + tag_height * 0.75
 
     return [
-        {"command": "LINE", "from": [left_x, top_y], "to": [right_x, top_y], "layer": layer},
-        {"command": "LINE", "from": [left_x, bottom_y], "to": [right_x, bottom_y], "layer": layer},
+        {
+            "command": "LINE",
+            "from": [left_x, top_y],
+            "to": [right_x, top_y],
+            "layer": layer,
+        },
+        {
+            "command": "LINE",
+            "from": [left_x, bottom_y],
+            "to": [right_x, bottom_y],
+            "layer": layer,
+        },
         {
             "command": "ARC",
             "center": [left_x, cy],
@@ -162,16 +227,29 @@ def vertical_vessel_commands(
     right_x = cx + radius
     top_y = cy + float(height) / 2.0
     bottom_y = cy - float(height) / 2.0
+
     tag_height = _equipment_tag_height(diameter)
     tag_width = _estimated_text_width(tag, tag_height)
     tag_x = cx - tag_width / 2.0
     tag_y = cy + float(diameter) * 0.12
+
+    # If the tag would be too wide inside the vessel, place it above.
     if tag_width > float(diameter) * 0.9:
         tag_y = top_y + tag_height * 0.75
 
     return [
-        {"command": "LINE", "from": [left_x, bottom_y], "to": [left_x, top_y], "layer": layer},
-        {"command": "LINE", "from": [right_x, bottom_y], "to": [right_x, top_y], "layer": layer},
+        {
+            "command": "LINE",
+            "from": [left_x, bottom_y],
+            "to": [left_x, top_y],
+            "layer": layer,
+        },
+        {
+            "command": "LINE",
+            "from": [right_x, bottom_y],
+            "to": [right_x, top_y],
+            "layer": layer,
+        },
         {
             "command": "ARC",
             "center": [cx, top_y],
@@ -218,19 +296,42 @@ def gate_valve_commands(
         return [
             {
                 "command": "POLYLINE",
-                "points": [[cx - body_half, cy - body_width], [cx, cy], [cx - body_half, cy + body_width]],
+                "points": [
+                    [cx - body_half, cy - body_width],
+                    [cx, cy],
+                    [cx - body_half, cy + body_width],
+                ],
                 "closed": True,
                 "layer": layer,
             },
             {
                 "command": "POLYLINE",
-                "points": [[cx + body_half, cy - body_width], [cx, cy], [cx + body_half, cy + body_width]],
+                "points": [
+                    [cx + body_half, cy - body_width],
+                    [cx, cy],
+                    [cx + body_half, cy + body_width],
+                ],
                 "closed": True,
                 "layer": layer,
             },
-            {"command": "LINE", "from": [cx - half - connector, cy], "to": [cx - body_half, cy], "layer": layer},
-            {"command": "LINE", "from": [cx + body_half, cy], "to": [cx + half + connector, cy], "layer": layer},
-            {"command": "LINE", "from": [cx, cy + body_width], "to": [cx, cy + body_width + stem], "layer": layer},
+            {
+                "command": "LINE",
+                "from": [cx - half - connector, cy],
+                "to": [cx - body_half, cy],
+                "layer": layer,
+            },
+            {
+                "command": "LINE",
+                "from": [cx + body_half, cy],
+                "to": [cx + half + connector, cy],
+                "layer": layer,
+            },
+            {
+                "command": "LINE",
+                "from": [cx, cy + body_width],
+                "to": [cx, cy + body_width + stem],
+                "layer": layer,
+            },
             {
                 "command": "LINE",
                 "from": [cx - handle, cy + body_width + stem],
@@ -242,19 +343,42 @@ def gate_valve_commands(
     return [
         {
             "command": "POLYLINE",
-            "points": [[cx - body_width, cy - body_half], [cx, cy], [cx + body_width, cy - body_half]],
+            "points": [
+                [cx - body_width, cy - body_half],
+                [cx, cy],
+                [cx + body_width, cy - body_half],
+            ],
             "closed": True,
             "layer": layer,
         },
         {
             "command": "POLYLINE",
-            "points": [[cx - body_width, cy + body_half], [cx, cy], [cx + body_width, cy + body_half]],
+            "points": [
+                [cx - body_width, cy + body_half],
+                [cx, cy],
+                [cx + body_width, cy + body_half],
+            ],
             "closed": True,
             "layer": layer,
         },
-        {"command": "LINE", "from": [cx, cy - half - connector], "to": [cx, cy - body_half], "layer": layer},
-        {"command": "LINE", "from": [cx, cy + body_half], "to": [cx, cy + half + connector], "layer": layer},
-        {"command": "LINE", "from": [cx + body_width, cy], "to": [cx + body_width + stem, cy], "layer": layer},
+        {
+            "command": "LINE",
+            "from": [cx, cy - half - connector],
+            "to": [cx, cy - body_half],
+            "layer": layer,
+        },
+        {
+            "command": "LINE",
+            "from": [cx, cy + body_half],
+            "to": [cx, cy + half + connector],
+            "layer": layer,
+        },
+        {
+            "command": "LINE",
+            "from": [cx + body_width, cy],
+            "to": [cx + body_width + stem, cy],
+            "layer": layer,
+        },
         {
             "command": "LINE",
             "from": [cx + body_width + stem, cy - handle],
@@ -285,8 +409,18 @@ def control_valve_commands(
         stem_to = [cx + float(size) * 0.48, cy]
 
     commands += [
-        {"command": "CIRCLE", "center": actuator_center, "radius": actuator_radius, "layer": layer},
-        {"command": "LINE", "from": actuator_center, "to": stem_to, "layer": layer},
+        {
+            "command": "CIRCLE",
+            "center": actuator_center,
+            "radius": actuator_radius,
+            "layer": layer,
+        },
+        {
+            "command": "LINE",
+            "from": actuator_center,
+            "to": stem_to,
+            "layer": layer,
+        },
     ]
     return commands
 
@@ -305,8 +439,18 @@ def instrument_bubble_commands(
     text_height = min(max(float(radius) * 0.24, 32.0), 52.0)
     text_width = _estimated_text_width(tag, text_height)
     return [
-        {"command": "CIRCLE", "center": [cx, cy], "radius": float(radius), "layer": layer},
-        {"command": "LINE", "from": [cx - radius, cy], "to": [cx + radius, cy], "layer": layer},
+        {
+            "command": "CIRCLE",
+            "center": [cx, cy],
+            "radius": float(radius),
+            "layer": layer,
+        },
+        {
+            "command": "LINE",
+            "from": [cx - radius, cy],
+            "to": [cx + radius, cy],
+            "layer": layer,
+        },
         {
             "command": "TEXT",
             "text": tag,
@@ -348,7 +492,7 @@ def flow_arrow_commands(
     elif direction == "UP":
         points = [[x, y + half], [x - width, y - half], [x + width, y - half]]
     else:
-        points = [[x, y - half], [x - width, y + half], [x + width, y + half]]
+        points = [[x, y - half], [x - width, y + width], [x + width, y + width]]
 
     return [
         {
