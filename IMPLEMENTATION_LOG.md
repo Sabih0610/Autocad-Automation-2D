@@ -19,3 +19,15 @@ returned six entities and property records without SQLite or AutoCAD. Full suite
 conversion remains environment-limited (ODA absent), tested through a fake adapter.
 Review found no COM/LLM imports. No architecture deviation; unsupported dynamic
 block/constraint semantics and proxy entities are surfaced as metadata warnings.
+
+## Step 3 — Multi-file offline scanner
+Added `src/cad/scanner.py` and `tests/project/test_scanner.py`: recursive project
+inventory, parent-only database writes, process-pool extraction, stat/hash-based
+incremental skips, per-file errors/retries, disappeared-file marking and changed-
+during-read rejection. Three actual DXF files were scanned in two OS workers;
+a folder of two DWG test files used the injected converter and a second scan
+extracted zero files. Full suite: 904 passed, 10 skipped. Reviewed that the scan
+path imports neither COM nor an LLM and only traverses the registered root.
+Definition of done verified with real DXF and injected DWG conversion; production
+DWG conversion remains unverified without ODA. Additive scope detail: native DXF
+files are scanned as well as DWG, enabling offline use without conversion.
