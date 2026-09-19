@@ -9,6 +9,7 @@ from src.cad.extractor import DXFExtractor
 from src.cad.extractor.oda import ODAConverter
 from src.storage.database import connection
 from src.storage.project_repository import get_project, now
+from src.storage.entity_repository import store_snapshot
 
 
 def file_hash(path):
@@ -37,11 +38,13 @@ def list_drawings(project_id):
     get_project(project_id)
     with connection() as conn:
         return [dict(row) for row in conn.execute(
-            "SELECT * FROM drawings WHERE project_id=? ORDER BY path", (project_id,))]
+            """SELECT d.*,m.drawing_id IS NOT NULL AS indexed FROM drawings d
+            LEFT JOIN drawing_metadata m ON m.drawing_id=d.drawing_id
+            WHERE project_id=? ORDER BY path""", (project_id,))]
 
 
 def _store_snapshot(conn, drawing_id, snapshot):
-    """Entity indexing is layered onto this atomic scan completion hook."""
+    store_snapshot(conn, drawing_id, snapshot)
 
 
 def scan_project(project_id, *, extractor_factory=configured_extractor, max_workers=None):
@@ -69,13 +72,13 @@ def scan_project(project_id, *, extractor_factory=configured_extractor, max_work
                              (drawing_id, project_id, str(path), path.name))
         try:
             signature = stamp(path)
-            if row and row["scan_status"] == "scanned" and signature == (row["file_size"], row["file_modified_at"]):
+            if row and row["indexed"] and row["scan_status"] == "scanned" and signature == (row["file_size"], row["file_modified_at"]):
                 report["skipped"] += 1
                 continue
             digest = file_hash(path)
             if stamp(path) != signature:
                 raise RuntimeError("File changed while hashing; rescan required")
-            if row and row["scan_status"] == "scanned" and digest == row["file_hash"]:
+            if row and row["indexed"] and row["scan_status"] == "scanned" and digest == row["file_hash"]:
                 with connection() as conn:
                     conn.execute("UPDATE drawings SET file_size=?,file_modified_at=? WHERE drawing_id=?",
                                  (*signature, drawing_id))

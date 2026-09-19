@@ -103,3 +103,11 @@ CREATE TABLE IF NOT EXISTS validation_results (
     passed         INTEGER NOT NULL,  -- 0/1
     message        TEXT
 );
+
+-- Extractor document metadata is not represented by the original roadmap tables.
+CREATE TABLE IF NOT EXISTS drawing_metadata (
+    drawing_id TEXT PRIMARY KEY REFERENCES drawings(drawing_id),
+    units INTEGER NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entity_tag_nocase ON entities(tag COLLATE NOCASE, drawing_id);

@@ -31,3 +31,14 @@ path imports neither COM nor an LLM and only traverses the registered root.
 Definition of done verified with real DXF and injected DWG conversion; production
 DWG conversion remains unverified without ODA. Additive scope detail: native DXF
 files are scanned as well as DWG, enabling offline use without conversion.
+
+## Step 4 — Persistent entity/component index
+Added `src/storage/entity_repository.py`, wired atomic snapshot persistence into
+the scanner, and added `tests/project/test_entity_index.py`. Entities have stable
+drawing/handle IDs; properties and geometry refresh transactionally; removed
+entities disappear from queries without destroying changeset history. Case-
+insensitive, project-scoped tag lookup uses one indexed SQL query (verified with
+EXPLAIN QUERY PLAN) and opens no drawing. Full suite: 907 passed, 10 skipped.
+Definition of done fully met. Review confirmed no CAD/LLM calls. Schema addition:
+`drawing_metadata` stores units and document metadata/warnings absent from the
+roadmap's entity-only tables; units are essential for correct millimetre edits.
