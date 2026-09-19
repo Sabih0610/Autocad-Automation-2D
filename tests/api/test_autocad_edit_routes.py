@@ -117,8 +117,9 @@ def _patch_edit_stack(
     captured.setdefault("generate_calls", [])
     captured.setdefault("execute_calls", [])
 
-    def fake_inspect(max_entities=500):
+    def fake_inspect(max_entities=500, target_dwg_path=None):
         captured["inspect_calls"].append(max_entities)
+        captured["inspection_target"] = target_dwg_path
         if inspect_error is not None:
             raise inspect_error
         return FAKE_INSPECTION
@@ -274,6 +275,7 @@ def test_target_dwg_path_is_passed_to_execute_edit_plan(client, monkeypatch) -> 
 
     assert response.status_code == 200
     assert captured["execute_calls"][0]["target_dwg_path"] == r"E:\RC-Projects\test.dwg"
+    assert captured["inspection_target"] == r"E:\RC-Projects\test.dwg"
 
 
 def test_inspector_autocad_not_running_returns_503(client, monkeypatch) -> None:

@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS drawing_metadata (
 CREATE INDEX IF NOT EXISTS idx_entity_tag_nocase ON entities(tag COLLATE NOCASE, drawing_id);
 
 CREATE TABLE IF NOT EXISTS spatial_version (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS drawing_sessions (path TEXT PRIMARY KEY, is_open INTEGER NOT NULL CHECK(is_open IN (0,1)));
 INSERT OR IGNORE INTO spatial_version VALUES (1,0);
 CREATE TRIGGER IF NOT EXISTS geometry_version_insert AFTER INSERT ON entity_geometry BEGIN
     UPDATE spatial_version SET version=version+1 WHERE id=1;

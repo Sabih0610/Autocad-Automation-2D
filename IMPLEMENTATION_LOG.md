@@ -54,3 +54,25 @@ query plan. Full suite: 912 passed, 10 skipped. Definition of done fully met.
 Review: no LLM/COM calls. Proximity means Euclidean distance between axis-aligned
 bounds, not exact solid collision or associative constraints. Added a one-row
 `spatial_version` table for fallback cache invalidation; no platform change.
+
+## Step 6 — Structured modification engine
+Added strict operation schemas (also exposed through `commands/schema.py`),
+`modification_executor.py`, pure geometry/unit calculations and explicit COM
+session targeting. LINE length and XY CIRCLE/ARC radius edits use existing handles;
+connected lines/block insertions/attributes move in place. Property, SummaryInfo,
+layer-color and filesystem-rename operations are supported. Stale index/unsaved
+state, nonfinite/nonpositive dimensions, unsupported dependencies and new bounding-
+box overlaps fail before mutation. Inspector and inspect/edit HTTP routes now
+forward explicit targets; legacy no-target behavior remains for compatibility.
+Added `drawing_sessions` for conservative rename guards. New tests use a COM-shaped
+adapter that saves actual DXF: 1000→1050 mm and connected-valve movement preserve
+handles, then offline extraction verifies saved geometry. Also tested inches,
+rollback on save failure, invalid contracts, properties, rename, inspector targeting
+and overlap rejection. Full suite: 927 passed, 10 skipped; strengthened existing
+route target-forwarding assertion also passed. Review: no delete/recreate or LLM
+in the new engine, no active-document fallback in the new path. Definition of done
+met with a file-backed test adapter; live licensed AutoCAD/DWG verification remains
+unexecuted, so the real-COM acceptance criterion is only partially verified.
+Roadmap compatibility interpretation: additive project edits replace neither the
+legacy delete/add API contract nor the four existing generation pipelines. Unsupported
+constraint graphs are rejected, not used as a reason to introduce Step 9.

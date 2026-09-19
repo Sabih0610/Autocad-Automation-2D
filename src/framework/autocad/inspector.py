@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import Counter
 from typing import Any, Iterator
+from src.cad.session import serialized
 
 from src.parametric.vessel.dwg_export import (
     AutoCADNotRunningError,
@@ -225,8 +226,9 @@ def _iter_modelspace_entities(msp, max_entities: int) -> Iterator[tuple[int, Any
         yield index, entity
 
 
-def inspect_active_drawing(max_entities: int = 500) -> dict:
-    """Inspect the active AutoCAD drawing without changing it."""
+@serialized
+def inspect_active_drawing(max_entities: int = 500, target_dwg_path: str | None = None) -> dict:
+    """Inspect an explicit file, retaining the legacy active-document API for compatibility."""
     if max_entities < 1:
         raise DrawingInspectionError("max_entities must be at least 1")
 
@@ -240,9 +242,14 @@ def inspect_active_drawing(max_entities: int = 500) -> dict:
         ) from exc
 
     try:
-        doc = _com_retry(lambda: acad.ActiveDocument, "getting active document")
+        if target_dwg_path is not None:
+            from src.cad.session import CAD_LOCK, get_document
+            with CAD_LOCK:
+                doc = get_document(acad, target_dwg_path)
+        else:
+            doc = _com_retry(lambda: acad.ActiveDocument, "getting active document")
     except Exception as exc:
-        raise DrawingInspectionError("No active AutoCAD document is available.") from exc
+        raise DrawingInspectionError(f"Cannot inspect target {target_dwg_path}: {exc}" if target_dwg_path else "No active AutoCAD document is available.") from exc
 
     if doc is None:
         raise DrawingInspectionError("No active AutoCAD document is available.")

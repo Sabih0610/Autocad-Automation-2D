@@ -326,6 +326,18 @@ COMMAND_SCHEMA: dict[str, Any] = {
 }
 
 
+from .operation_schema import OPERATION_SCHEMA, OPERATION_VARIANTS, validate_operation
+
+# Existing creation schemas remain unchanged. Structured modifications carry their
+# own explicit path and are dispatched through modification_executor.
+for _variant in OPERATION_VARIANTS:
+    _name = _variant["properties"]["command"]["const"]
+    _COMMAND_TYPES.append(_name)
+    COMMAND_SCHEMA["properties"]["commands"]["items"]["allOf"].append({
+        "if": {"properties": {"command": {"const": _name}}, "required": ["command"]},
+        "then": _variant,
+    })
+
 _VALIDATOR = Draft7Validator(COMMAND_SCHEMA)
 
 

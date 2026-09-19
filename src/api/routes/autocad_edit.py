@@ -31,12 +31,13 @@ class AutoCADEditRequest(BaseModel):
     target_dwg_path: str | None = None
 
 
-def _inspect_with_com(max_entities: int) -> tuple[dict, str]:
+def _inspect_with_com(max_entities: int, target_dwg_path: str | None = None) -> tuple[dict, str]:
     import pythoncom
 
     pythoncom.CoInitialize()
     try:
-        inspection = inspect_active_drawing(max_entities=max_entities)
+        options = {"target_dwg_path": target_dwg_path} if target_dwg_path else {}
+        inspection = inspect_active_drawing(max_entities=max_entities, **options)
         summary = summarize_drawing_state(inspection)
     finally:
         pythoncom.CoUninitialize()
@@ -70,7 +71,7 @@ def edit_autocad_drawing(request: AutoCADEditRequest):
         raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
 
     try:
-        inspection, inspection_summary = _inspect_with_com(request.max_entities)
+        inspection, inspection_summary = _inspect_with_com(request.max_entities, request.target_dwg_path)
     except AutoCADNotRunningError as exc:
         raise HTTPException(
             status_code=503,

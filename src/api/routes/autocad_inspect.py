@@ -17,13 +17,15 @@ router = APIRouter(prefix="/api/autocad", tags=["autocad"])
 @router.get("/inspect")
 def inspect_autocad_drawing(
     max_entities: int = Query(default=200, ge=1, le=2000),
+    target_dwg_path: str | None = Query(default=None),
 ):
     """Return a read-only snapshot of the active AutoCAD drawing."""
     import pythoncom
 
     pythoncom.CoInitialize()
     try:
-        inspection = inspect_active_drawing(max_entities=max_entities)
+        options = {"target_dwg_path": target_dwg_path} if target_dwg_path else {}
+        inspection = inspect_active_drawing(max_entities=max_entities, **options)
         summary = summarize_drawing_state(inspection)
     except AutoCADNotRunningError as exc:
         raise HTTPException(
