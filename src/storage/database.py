@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from src.logging import db
+from .spatial import ensure_spatial
 
 SCHEMA = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8-sig")
 
@@ -13,6 +14,7 @@ def connection():
     try:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.executescript(SCHEMA)
+        ensure_spatial(conn)
         conn.executescript("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_project_root ON projects(root_path);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_drawing_path ON drawings(project_id, path);

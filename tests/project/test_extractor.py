@@ -47,7 +47,7 @@ def test_extract_real_dxf_all_six_shapes(tmp_path):
     assert reader.extract_properties(path)[handle]["xdata"]
     geometry = next(b for b in reader.extract_spatial_data(path) if b.handle == handle)
     assert geometry.end == (1000, 0, 0)
-    assert reader.extract_relationships(path) == []
+    assert len(reader.extract_relationships(path)) == 2
     json.dumps(asdict(reader.extract(path)))
 
 

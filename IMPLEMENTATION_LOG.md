@@ -42,3 +42,15 @@ EXPLAIN QUERY PLAN) and opens no drawing. Full suite: 907 passed, 10 skipped.
 Definition of done fully met. Review confirmed no CAD/LLM calls. Schema addition:
 `drawing_metadata` stores units and document metadata/warnings absent from the
 roadmap's entity-only tables; units are essential for correct millimetre edits.
+
+## Step 5 — Relationships + spatial index
+Added endpoint/insertion-point connection inference in `src/cad/relationships.py`,
+same-tag cross-file appearance edges, unit conversion, and `src/storage/spatial.py`.
+RTree is probed by creating the virtual table, maintained transactionally by
+triggers; cKDTree provides a versioned fallback rebuilt only after index changes.
+`tests/project/test_spatial.py` verifies 100 mm searches, drawing/layout isolation,
+rescan invalidation, relationship types, missing-extension fallback and the RTree
+query plan. Full suite: 912 passed, 10 skipped. Definition of done fully met.
+Review: no LLM/COM calls. Proximity means Euclidean distance between axis-aligned
+bounds, not exact solid collision or associative constraints. Added a one-row
+`spatial_version` table for fallback cache invalidation; no platform change.

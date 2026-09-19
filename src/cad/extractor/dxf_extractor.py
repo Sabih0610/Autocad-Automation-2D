@@ -88,7 +88,11 @@ class DXFExtractor(DrawingExtractor):
                         spatial.append(BoundingBox(handle, points[0], points[-1], start, end, points))
                 except Exception as exc:
                     metadata.warnings.append(f"No bounds for {handle}: {type(exc).__name__}")
-        return DrawingSnapshot(metadata, entities, blocks, properties, [], spatial)
+        from src.cad.relationships import infer_connections
+        from src.cad.units import from_mm
+        tolerance = from_mm(0.01, metadata.units) if metadata.units else 1e-6
+        relationships = infer_connections(spatial, properties, tolerance)
+        return DrawingSnapshot(metadata, entities, blocks, properties, relationships, spatial)
 
     def extract_document(self, source):
         return self.extract(source).document

@@ -44,6 +44,20 @@ def store_snapshot(conn, drawing_id, snapshot):
                      (ids[box.handle], *start, *end, *bounds))
     conn.execute("INSERT INTO drawing_metadata VALUES (?,?,?) ON CONFLICT(drawing_id) DO UPDATE SET units=excluded.units,payload=excluded.payload",
                  (drawing_id, snapshot.document.units, json.dumps(asdict(snapshot.document), allow_nan=False)))
+    for relation in snapshot.relationships:
+        conn.execute("INSERT OR IGNORE INTO relationships VALUES (?,?,?)",
+                     (ids[relation.source_handle], relation.relationship_type, ids[relation.target_handle]))
+    # Same tag in another drawing is an appearance, never spatial connectivity.
+    for entity in snapshot.entities:
+        if not entity.tag:
+            continue
+        others = conn.execute("""SELECT e.entity_id FROM entities e JOIN drawings d ON d.drawing_id=e.drawing_id
+            WHERE e.tag=? COLLATE NOCASE AND e.drawing_id<>? AND d.scan_status='scanned'
+            AND d.project_id=(SELECT project_id FROM drawings WHERE drawing_id=?)""",
+                              (entity.tag, drawing_id, drawing_id)).fetchall()
+        for other in others:
+            for source, target in ((ids[entity.handle], other[0]), (other[0], ids[entity.handle])):
+                conn.execute("INSERT OR IGNORE INTO relationships VALUES (?,'appears_in',?)", (source, target))
 
 
 TAG_QUERY = """SELECT e.*, d.path, d.project_id, d.file_hash, m.units,
