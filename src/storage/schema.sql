@@ -114,6 +114,17 @@ CREATE INDEX IF NOT EXISTS idx_entity_tag_nocase ON entities(tag COLLATE NOCASE,
 
 CREATE TABLE IF NOT EXISTS spatial_version (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS drawing_sessions (path TEXT PRIMARY KEY, is_open INTEGER NOT NULL CHECK(is_open IN (0,1)));
+CREATE TABLE IF NOT EXISTS change_set_files (
+    change_set_id TEXT NOT NULL REFERENCES change_sets(change_set_id),
+    drawing_id TEXT NOT NULL REFERENCES drawings(drawing_id),
+    original_path TEXT NOT NULL,
+    current_path TEXT NOT NULL,
+    backup_path TEXT NOT NULL,
+    before_hash TEXT NOT NULL,
+    after_hash TEXT,
+    uses_cad INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY(change_set_id,drawing_id)
+);
 INSERT OR IGNORE INTO spatial_version VALUES (1,0);
 CREATE TRIGGER IF NOT EXISTS geometry_version_insert AFTER INSERT ON entity_geometry BEGIN
     UPDATE spatial_version SET version=version+1 WHERE id=1;

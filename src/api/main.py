@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from src.api.routes.autocad_edit import router as autocad_edit_router
 from src.api.routes.autocad_inspect import router as autocad_inspect_router
 from src.api.routes.cad3d import router as cad3d_router
+from src.api.routes.changes import router as changes_router
 from src.api.routes.consistency import router as consistency_router
 from src.api.routes.line_list import router as line_list_router
 from src.api.routes.pid import router as pid_router
@@ -28,6 +29,9 @@ OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_AUDIT_BYTES = 100 * 1024
 AUDIT_ROUTE_MAP = {
+    "/api/change-sets": "project_apply",
+    "/api/change-sets/{change_id}/keep": "changeset_keep",
+    "/api/change-sets/{change_id}/revert": "changeset_revert",
     "/api/title-block-update": "title_block_update",
     "/api/line-list-extract": "line_list_extract",
     "/api/place-symbol": "place_symbol",
@@ -63,6 +67,7 @@ app.include_router(autocad_inspect_router)
 app.include_router(autocad_edit_router)
 app.include_router(pid_router)
 app.include_router(cad3d_router)
+app.include_router(changes_router)
 
 
 def _truncate_payload(payload: Any) -> Any:

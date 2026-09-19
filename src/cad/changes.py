@@ -1,0 +1,230 @@
+"""Durable whole-file changesets; AI-free, explicitly targeted, serialized writes."""
+from contextlib import nullcontext
+import json
+import os
+from pathlib import Path
+import shutil
+from uuid import uuid4
+
+from src.backup import backup_file
+from src.cad.scanner import configured_extractor, file_hash, stamp
+from src.cad.session import (CAD_LOCK, cad_session, canonical_path, find_open_document,
+                             get_document, mark_open)
+from src.framework.commands.modification_executor import execute_operation
+from src.framework.commands.operation_schema import validate_operation
+from src.storage.database import connection
+from src.storage.entity_repository import store_snapshot
+from src.storage.project_repository import get_project, now
+
+
+def get_change_set(change_set_id):
+    with connection() as conn:
+        row = conn.execute("SELECT * FROM change_sets WHERE change_set_id=?", (change_set_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"Unknown changeset: {change_set_id}")
+        result = dict(row)
+        result["items"] = [dict(row) for row in conn.execute("SELECT * FROM change_set_items WHERE change_set_id=?", (change_set_id,))]
+        result["files"] = [dict(row) for row in conn.execute("SELECT * FROM change_set_files WHERE change_set_id=?", (change_set_id,))]
+        result["validation"] = [dict(row) for row in conn.execute("SELECT * FROM validation_results WHERE change_set_id=?", (change_set_id,))]
+    for item in result["items"]:
+        item["before_value"] = json.loads(item["before_value"]) if item["before_value"] else None
+        item["after_value"] = json.loads(item["after_value"]) if item["after_value"] else None
+    return result
+
+
+def list_change_sets(project_id):
+    with connection() as conn:
+        return [dict(row) for row in conn.execute("SELECT * FROM change_sets WHERE project_id=? ORDER BY created_at DESC", (project_id,))]
+
+
+def refresh_drawing(drawing_id, path, extractor_factory=configured_extractor):
+    signature = stamp(path)
+    snapshot = extractor_factory().extract(path)
+    digest = file_hash(path)
+    if stamp(path) != signature:
+        raise ValueError("Drawing changed during post-edit validation")
+    with connection() as conn:
+        store_snapshot(conn, drawing_id, snapshot)
+        conn.execute("""UPDATE drawings SET path=?,filename=?,file_size=?,file_modified_at=?,file_hash=?,
+            last_scanned_at=?,scan_status='scanned',scan_error=NULL WHERE drawing_id=?""",
+                     (str(path), Path(path).name, *signature, digest, now(), drawing_id))
+    return snapshot
+
+
+class ChangeManager:
+    def __init__(self, *, acad=None, extractor_factory=configured_extractor):
+        self.acad = acad
+        self.extractor_factory = extractor_factory
+
+    def apply(self, project_id, operations, summary, *, on_item=None):
+        if not operations or not summary.strip():
+            raise ValueError("A changeset needs operations and a summary")
+        project = get_project(project_id)
+        if project["status"] != "active":
+            raise ValueError("Project is archived")
+        targets = {}
+        for op in operations:
+            validate_operation(op)
+            path = canonical_path(op["target_dwg_path"])
+            if not Path(path).is_relative_to(Path(project["root_path"])):
+                raise ValueError("Operation is outside the selected project")
+            with connection() as conn:
+                row = conn.execute("SELECT * FROM drawings WHERE project_id=? AND path=?", (project_id, path)).fetchone()
+            if row is None or row["scan_status"] != "scanned":
+                raise ValueError("Target must be scanned in the selected project")
+            if file_hash(path) != row["file_hash"]:
+                raise ValueError("Drawing changed since scanning; rescan first")
+            targets[path] = dict(row)
+        rename_paths = {op["target_dwg_path"] for op in operations if op["command"] == "RENAME_FILE"}
+        if any(sum(op["target_dwg_path"] == path for op in operations) != 1 for path in rename_paths):
+            raise ValueError("A rename must be the only operation on its file in a changeset")
+        has_cad = any(op["command"] != "RENAME_FILE" for op in operations)
+        with CAD_LOCK, (cad_session(self.acad) if has_cad else nullcontext(None)) as acad:
+            for path in targets:
+                if path not in rename_paths and not get_document(acad, path).Saved:
+                    raise ValueError("Save or discard existing unsaved edits before applying changes")
+            change_id = uuid4().hex
+            with connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                for path in targets:
+                    conflict = conn.execute("""SELECT 1 FROM change_set_files f JOIN change_sets c ON c.change_set_id=f.change_set_id
+                        WHERE (f.original_path=? OR f.current_path=?) AND c.status IN ('applying','pending','error','reverting')""", (path, path)).fetchone()
+                    if conflict:
+                        raise ValueError("Resolve the existing pending changeset for this drawing first")
+                conn.execute("INSERT INTO change_sets VALUES (?,?,?,'applying',?)", (change_id, project_id, summary, now()))
+                for path, row in targets.items():
+                    backup = backup_file(Path(path))
+                    if file_hash(backup) != row["file_hash"]:
+                        raise ValueError("Drawing changed while creating the backup")
+                    conn.execute("INSERT INTO change_set_files VALUES (?,?,?,?,?,?,NULL,?)",
+                                 (change_id, row["drawing_id"], path, path, str(backup), row["file_hash"], int(path not in rename_paths)))
+            active_path = None
+            try:
+                for index, op in enumerate(operations):
+                    active_path = canonical_path(op["target_dwg_path"])
+                    row = targets[active_path]
+                    if on_item:
+                        on_item(index, "running", None)
+                    result = execute_operation(op, acad=acad, verify_extractor=self.extractor_factory(), _backup=False)
+                    current_path = result["path"]
+                    self._record_file(change_id, row["drawing_id"], current_path)
+                    with connection() as conn:
+                        for change in result["changes"]:
+                            entity = conn.execute("SELECT entity_id FROM entities WHERE drawing_id=? AND handle=?",
+                                                  (row["drawing_id"], change["handle"])).fetchone()
+                            backup = conn.execute("SELECT backup_path FROM change_set_files WHERE change_set_id=? AND drawing_id=?",
+                                                  (change_id, row["drawing_id"])).fetchone()[0]
+                            conn.execute("INSERT INTO change_set_items VALUES (?,?,?,?,?,?,?,?)", (uuid4().hex, change_id,
+                                row["drawing_id"], backup, entity[0] if entity else None, change["field"],
+                                json.dumps(change["before"]), json.dumps(change["after"])))
+                    refresh_drawing(row["drawing_id"], current_path, self.extractor_factory)
+                    if on_item:
+                        on_item(index, "done", None)
+                self._validation(change_id, True, "Saved files re-extracted; structured operation checks passed")
+                with connection() as conn:
+                    conn.execute("UPDATE change_sets SET status='pending' WHERE change_set_id=?", (change_id,))
+            except Exception as exc:
+                # Retain evidence and a usable revert action even after partial writes.
+                for path, row in targets.items():
+                    with connection() as conn:
+                        current = conn.execute("SELECT path FROM drawings WHERE drawing_id=?", (row["drawing_id"],)).fetchone()[0]
+                    if Path(current).exists():
+                        self._record_file(change_id, row["drawing_id"], current)
+                with connection() as conn:
+                    conn.execute("UPDATE change_sets SET status='error' WHERE change_set_id=?", (change_id,))
+                    for row in targets.values():
+                        conn.execute("UPDATE drawings SET scan_status='pending' WHERE drawing_id=?", (row["drawing_id"],))
+                self._validation(change_id, False, f"{type(exc).__name__}: {exc}")
+                if on_item:
+                    on_item(index, "error", str(exc))
+            return get_change_set(change_id)
+
+    @staticmethod
+    def _record_file(change_id, drawing_id, path):
+        with connection() as conn:
+            conn.execute("UPDATE change_set_files SET current_path=?,after_hash=? WHERE change_set_id=? AND drawing_id=?",
+                         (path, file_hash(path), change_id, drawing_id))
+
+    @staticmethod
+    def _validation(change_id, passed, message):
+        with connection() as conn:
+            conn.execute("INSERT INTO validation_results VALUES (?,?,?,?,?)", (uuid4().hex, change_id, "saved_file_validation", int(passed), message))
+
+    def keep(self, change_id):
+        with CAD_LOCK:
+            change = get_change_set(change_id)
+            if change["status"] == "kept":
+                return change
+            if change["status"] != "pending" or not change["validation"] or any(not row["passed"] for row in change["validation"]):
+                raise ValueError("Only a successfully validated pending changeset can be kept")
+            self._check_files(change)
+            with connection() as conn:
+                conn.execute("UPDATE change_sets SET status='kept' WHERE change_set_id=?", (change_id,))
+            return get_change_set(change_id)
+
+    @staticmethod
+    def _check_files(change):
+        for item in change["files"]:
+            current = Path(item["current_path"])
+            expected = item["after_hash"] or item["before_hash"]
+            if not current.exists() or file_hash(current) != expected:
+                raise ValueError("Drawing changed after this changeset; refusing to overwrite later work")
+            if file_hash(item["backup_path"]) != item["before_hash"]:
+                raise ValueError("Backup integrity check failed")
+            if item["current_path"] != item["original_path"] and Path(item["original_path"]).exists():
+                raise ValueError("Original rename destination now exists; refusing to overwrite it")
+            if not item["uses_cad"] and (current.with_suffix(".dwl").exists() or current.with_suffix(".dwl2").exists()):
+                raise ValueError("Close the renamed drawing before deciding this changeset")
+
+    def _close_targets(self, paths):
+        if self.acad is None:
+            from src.parametric.vessel.dwg_export import AutoCADNotRunningError
+        try:
+            with cad_session(self.acad) as acad:
+                docs = [(path, find_open_document(acad, path)) for path in paths]
+                if any(doc is not None and not doc.Saved for _, doc in docs):
+                    raise ValueError("A drawing has later unsaved edits; save them separately before reverting")
+                for path, doc in docs:
+                    if doc is not None:
+                        doc.Close(False)
+                    mark_open(path, False)
+        except Exception as exc:
+            if self.acad is None and isinstance(exc, AutoCADNotRunningError):
+                for path in paths:
+                    mark_open(path, False)
+            else:
+                raise
+
+    def revert(self, change_id):
+        with CAD_LOCK:
+            change = get_change_set(change_id)
+            if change["status"] == "reverted":
+                return change
+            if change["status"] not in {"pending", "error", "applying", "reverting"}:
+                raise ValueError("This changeset is already finalized")
+            self._check_files(change)
+            cad_paths = [item["current_path"] for item in change["files"] if item["uses_cad"]]
+            if cad_paths:
+                self._close_targets(cad_paths)
+            self._check_files(change)
+            with connection() as conn:
+                conn.execute("UPDATE change_sets SET status='reverting' WHERE change_set_id=?", (change_id,))
+            for item in change["files"]:
+                original, current = Path(item["original_path"]), Path(item["current_path"])
+                temporary = original.with_name(f".{original.name}.{uuid4().hex}.restore")
+                try:
+                    shutil.copy2(item["backup_path"], temporary)
+                    os.replace(temporary, original)
+                    if current != original:
+                        current.unlink()
+                finally:
+                    temporary.unlink(missing_ok=True)
+                with connection() as conn:
+                    conn.execute("UPDATE drawings SET path=?,filename=?,scan_status='pending' WHERE drawing_id=?",
+                                 (str(original), original.name, item["drawing_id"]))
+                    conn.execute("UPDATE change_set_files SET current_path=original_path,after_hash=before_hash WHERE change_set_id=? AND drawing_id=?",
+                                 (change_id, item["drawing_id"]))
+                refresh_drawing(item["drawing_id"], original, self.extractor_factory)
+            with connection() as conn:
+                conn.execute("UPDATE change_sets SET status='reverted' WHERE change_set_id=?", (change_id,))
+            return get_change_set(change_id)

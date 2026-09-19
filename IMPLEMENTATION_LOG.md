@@ -76,3 +76,21 @@ unexecuted, so the real-COM acceptance criterion is only partially verified.
 Roadmap compatibility interpretation: additive project edits replace neither the
 legacy delete/add API contract nor the four existing generation pipelines. Unsupported
 constraint graphs are rejected, not used as a reason to introduce Step 9.
+
+## Step 7 — ChangeSet + KEEP/REVERT
+Extended `backup_file()` with unique backup directories; the structured executor
+backs up by default. Added `src/cad/changes.py`, changeset API routes and a shared
+chat Keep/Revert card. Changes, before/after values, validation and file hashes
+persist in jobs.db; `change_set_files` tracks file-level backup/rename/recovery
+state missing from the roadmap's per-field item table. Pending changesets lock
+their files against overlapping edits; failures retain backups and a revert action.
+Revert checks later work and backup integrity, closes only explicit targets, restores
+exact bytes and refreshes the index. Rename/revert stays filesystem-only. Tests
+cover backup collisions, exact byte restoration, index refresh, persistence,
+one-shot finalization, pending conflicts, later edits, partial multi-file failure,
+rename rollback and HTTP actions. Full suite: 935 passed, 10 skipped; JS syntax
+check passed. Definition of done fully met using real file I/O plus the COM adapter;
+live AutoCAD close/restore remains unverified. Review: no delete/recreate, implicit
+target or LLM additions. Existing generation approval caches remain compatible;
+new project operations use the shared mechanism. Only our added script include
+is staged in sketch.html; the user's pre-existing changes remain uncommitted.

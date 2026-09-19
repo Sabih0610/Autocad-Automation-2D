@@ -187,12 +187,14 @@ def rename_file(op):
     return dict(path=str(destination), changes=[dict(handle=None, field="path", before=str(source), after=str(destination))])
 
 
-def execute_operation(operation, *, acad=None, entity_id=None, verify_extractor=None):
+def execute_operation(operation, *, acad=None, entity_id=None, verify_extractor=None, _backup=True):
     validate_operation(operation)
     path = canonical_path(operation["target_dwg_path"])
     with CAD_LOCK:
         if operation["command"] == "RENAME_FILE":
-            return rename_file(operation)
+            from src.backup import backup_file
+            backup = str(backup_file(Path(path))) if _backup else None
+            return dict(rename_file(operation), backup_path=backup)
         record = _indexed_record(path, operation["handle"], entity_id) if "handle" in operation else None
         if record:
             _verify_index(record, path)
@@ -201,6 +203,8 @@ def execute_operation(operation, *, acad=None, entity_id=None, verify_extractor=
             if not doc.Saved:
                 raise ValueError("Save or discard existing unsaved edits before modifying this drawing")
             changes = _prepare(doc, operation, record)
+            from src.backup import backup_file
+            backup = str(backup_file(Path(path))) if _backup else None
             applied = []
             custom = operation["command"] == "SET_DOCUMENT_PROPERTY" and operation["property"] == "custom"
             try:
@@ -244,4 +248,4 @@ def execute_operation(operation, *, acad=None, entity_id=None, verify_extractor=
             actual = props["end"] if first.property == "EndPoint" else props["radius"]
             if first.is_point and math.dist(actual, first.after) > 1e-6 or not first.is_point and abs(actual - first.after) > 1e-6:
                 raise ValueError("Saved-file re-extraction did not confirm the resize")
-        return dict(path=path, changes=summary, verified_by_extraction=snapshot is not None)
+        return dict(path=path, changes=summary, verified_by_extraction=snapshot is not None, backup_path=backup)

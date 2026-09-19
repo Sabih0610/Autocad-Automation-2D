@@ -12,6 +12,7 @@ Usage:
 import shutil
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 
 # Where backups go. Sits next to the project's source code.
@@ -29,7 +30,7 @@ def backup_file(source_path: Path) -> Path:
     if not source_path.exists():
         raise FileNotFoundError(f"Source file does not exist: {source_path}")
 
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f") + "_" + uuid4().hex
     target_dir = BACKUP_ROOT / timestamp
     target_dir.mkdir(parents=True, exist_ok=True)
 
