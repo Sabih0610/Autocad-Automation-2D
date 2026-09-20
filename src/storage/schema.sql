@@ -115,6 +115,10 @@ CREATE INDEX IF NOT EXISTS idx_entity_tag_nocase ON entities(tag COLLATE NOCASE,
 
 CREATE TABLE IF NOT EXISTS spatial_version (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS drawing_sessions (path TEXT PRIMARY KEY, is_open INTEGER NOT NULL CHECK(is_open IN (0,1)));
+CREATE TABLE IF NOT EXISTS job_change_sets (
+    job_id TEXT PRIMARY KEY REFERENCES jobs_multi_file(job_id),
+    change_set_id TEXT NOT NULL REFERENCES change_sets(change_set_id)
+);
 CREATE TABLE IF NOT EXISTS change_set_files (
     change_set_id TEXT NOT NULL REFERENCES change_sets(change_set_id),
     drawing_id TEXT NOT NULL REFERENCES drawings(drawing_id),

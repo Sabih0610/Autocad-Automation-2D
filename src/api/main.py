@@ -14,6 +14,7 @@ from src.api.routes.autocad_edit import router as autocad_edit_router
 from src.api.routes.autocad_inspect import router as autocad_inspect_router
 from src.api.routes.cad3d import router as cad3d_router
 from src.api.routes.changes import router as changes_router
+from src.api.routes.projects import router as projects_router
 from src.api.routes.consistency import router as consistency_router
 from src.api.routes.line_list import router as line_list_router
 from src.api.routes.pid import router as pid_router
@@ -29,6 +30,10 @@ OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_AUDIT_BYTES = 100 * 1024
 AUDIT_ROUTE_MAP = {
+    "/api/projects": "project_register",
+    "/api/projects/{project_id}/scan": "project_scan",
+    "/api/projects/{project_id}/plan": "project_plan",
+    "/api/projects/jobs/{job_id}/execute": "project_execute",
     "/api/change-sets": "project_apply",
     "/api/change-sets/{change_id}/keep": "changeset_keep",
     "/api/change-sets/{change_id}/revert": "changeset_revert",
@@ -68,6 +73,7 @@ app.include_router(autocad_edit_router)
 app.include_router(pid_router)
 app.include_router(cad3d_router)
 app.include_router(changes_router)
+app.include_router(projects_router)
 
 
 def _truncate_payload(payload: Any) -> Any:
@@ -216,6 +222,11 @@ class AuditJobMiddleware:
 
         path = scope.get("path", "")
         use_case = AUDIT_ROUTE_MAP.get(path)
+        if use_case is None:
+            for route in app.routes:
+                if isinstance(route, APIRoute) and route.path in AUDIT_ROUTE_MAP and route.path_regex.fullmatch(path):
+                    use_case = AUDIT_ROUTE_MAP[route.path]
+                    break
         if use_case is None:
             await self.app(scope, receive, send)
             return

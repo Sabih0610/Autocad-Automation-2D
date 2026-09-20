@@ -235,3 +235,28 @@ bytes unchanged. Focused tests: 35 passed. Full suite before: 946 passed,
 `src/framework/commands/modification_executor.py`, and
 `tests/project/test_changes.py`. The older creation/edit-plan backup gap is
 outside this structured-path follow-up.
+
+## Step 8 — indexed planning and single-consumer project jobs (2026-09-20)
+Completed the existing in-progress project planner and write queue. A tag query
+selects only matching indexed entities, reads connectivity for one exemplar,
+and sends one compact record to `ask_ai`; the returned small structured
+operation fans out to one `job_item` per affected drawing. Duplicate instances
+of a tag within one drawing now fail before AI planning, avoiding ambiguous
+one-item targeting. `SingleWriter` consumes the job through `ChangeManager` and
+the Step 6 executor, creating one ChangeSet for all affected files; the project
+and ChangeSet HTTP routes use that same queue for writes.
+
+The 10-DXF integration fixture has three P-101 drawings and seven other files.
+It verifies three job items, exactly one mocked AI call, and three files opened
+by the fake CAD adapter. The other seven files remain byte-identical. The test
+parses the actual AI prompt and asserts that it contains one selected entity
+record under 500 JSON characters, one drawing filename, no other filenames,
+and no drawing/entity dump. Revert restores all ten files; an HTTP-level test
+also exercises plan → execute → KEEP. Focused tests: 3 passed. Full suite
+before: 953 passed, 10 skipped, 0 failed (99.42 seconds); after: 956 passed,
+10 skipped, 0 failed (89.41 seconds). Created `src/ai/project_planner.py`,
+`src/cad/orchestrator.py`, `src/cad/write_queue.py`,
+`src/api/routes/projects.py`, and `tests/project/test_orchestrator.py`.
+Changed `src/storage/entity_repository.py`, `src/storage/schema.sql`,
+`src/api/main.py`, `src/api/routes/changes.py`, and this log. The unrelated
+pre-existing UI and scanner worktree changes remain uncommitted.

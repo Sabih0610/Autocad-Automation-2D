@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from src.cad.changes import ChangeManager, get_change_set
+from src.cad.write_queue import WRITE_QUEUE
+from jsonschema import ValidationError
 
 router = APIRouter(prefix="/api/change-sets", tags=["changesets"])
 
@@ -21,13 +23,13 @@ def respond(call):
         return call()
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, ValidationError) as exc:
         raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("")
 def apply(request: ApplyRequest):
-    return respond(lambda: manager().apply(request.project_id, request.operations, request.summary))
+    return respond(lambda: WRITE_QUEUE.run(manager().apply, request.project_id, request.operations, request.summary))
 
 
 @router.get("/{change_id}")
@@ -37,9 +39,9 @@ def detail(change_id: str):
 
 @router.post("/{change_id}/keep")
 def keep(change_id: str):
-    return respond(lambda: manager().keep(change_id))
+    return respond(lambda: WRITE_QUEUE.run(manager().keep, change_id))
 
 
 @router.post("/{change_id}/revert")
 def revert(change_id: str):
-    return respond(lambda: manager().revert(change_id))
+    return respond(lambda: WRITE_QUEUE.run(manager().revert, change_id))

@@ -67,7 +67,7 @@ def store_snapshot(conn, drawing_id, snapshot):
                     VALUES (?,'represented_in',?)""", (source, target))
 
 
-TAG_QUERY = """SELECT e.*, d.path, d.project_id, d.file_hash, m.units,
+TAG_QUERY = """SELECT e.*, d.path, d.filename, d.project_id, d.file_hash, m.units,
     g.start_x,g.start_y,g.start_z,g.end_x,g.end_y,g.end_z,
     g.min_x,g.max_x,g.min_y,g.max_y,g.min_z,g.max_z
     FROM entities e JOIN drawings d ON d.drawing_id=e.drawing_id
