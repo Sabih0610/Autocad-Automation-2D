@@ -5,13 +5,13 @@ import shutil
 import pytest
 import ezdxf
 
-from src.cad.extractor import DXFExtractor
-from src.cad.extractor.oda import ODAConverter
+from src.cad.extractor import DXFExtractor, DWGToDXFConverter, ODAConverter
 
 
 def make_dxf(path):
     doc = ezdxf.new()
     doc.units = 4  # millimetres
+    doc.header.custom_vars.append("PROJECT", "Demo Plant")
     doc.appids.new("AUTOCAD_AI")
     line = doc.modelspace().add_line((0, 0, 0), (1000, 0, 0))
     line.set_xdata("AUTOCAD_AI", [(1000, "TAG=P-101")])
@@ -41,6 +41,7 @@ def test_extract_real_dxf_all_six_shapes(tmp_path):
     handle = make_dxf(path)
     reader = DXFExtractor()
     assert reader.extract_document(path).units == 4
+    assert reader.extract_document(path).properties["PROJECT"] == "Demo Plant"
     assert [e.tag for e in reader.extract_entities(path) if e.handle == handle] == ["P-101"]
     assert len(reader.extract_entities(path)) == 3  # includes paperspace
     assert len(reader.extract_blocks(path)) == 2
@@ -57,6 +58,8 @@ def test_dwg_conversion_is_injected_cached_and_temporary(tmp_path):
     dxf = tmp_path / "source.dxf"
     make_dxf(dxf)
     converter = FakeConverter(dxf)
+    assert isinstance(converter, DWGToDXFConverter)
+    assert isinstance(ODAConverter("unused.exe"), DWGToDXFConverter)
     reader = DXFExtractor(converter)
     assert reader.extract_document(source).path == str(source)
     assert reader.extract_entities(source)

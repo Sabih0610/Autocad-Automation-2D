@@ -7,6 +7,7 @@ from ezdxf import bbox
 
 from .base import (DrawingExtractor, DrawingSnapshot, DocumentMetadata,
                    EntityRecord, BlockRecord, BoundingBox)
+from .converter import DWGToDXFConverter
 
 
 def _json_value(value):
@@ -19,7 +20,7 @@ def _json_value(value):
 
 
 class DXFExtractor(DrawingExtractor):
-    def __init__(self, converter=None):
+    def __init__(self, converter: DWGToDXFConverter | None = None):
         self.converter = converter
         self._key = None
         self._snapshot = None

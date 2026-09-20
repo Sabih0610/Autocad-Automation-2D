@@ -4,9 +4,11 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from .converter import DWGToDXFConverter
+
 
 @dataclass(frozen=True)
-class ODAConverter:
+class ODAConverter(DWGToDXFConverter):
     executable: str
     timeout: float = 120
 

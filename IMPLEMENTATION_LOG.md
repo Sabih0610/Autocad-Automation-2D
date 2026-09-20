@@ -136,3 +136,21 @@ No second production database, no jobs-table alterations, no new audit middlewar
 behavior. Previously authored later-step middleware edits remain in the working
 tree and are outside this follow-up. Step 8 is not claimed complete; Step 9 has
 not been implemented or measured.
+
+## Step 2 follow-up — explicit converter interface (2026-09-20)
+The six-method `DrawingExtractor` ABC and working `DXFExtractor` were already
+committed in `f849631`. The latest Step 2 request exposed one contract gap:
+conversion was injectable but had no named interface. Added
+`src/cad/extractor/converter.py` with a `DWGToDXFConverter` protocol, typed
+`DXFExtractor` against it, and made `ODAConverter` implement it. Updated the
+synthetic on-disk DXF fixture to include a custom document property and asserted
+the fake converter and optional ODA adapter satisfy the interface. Focused tests:
+4 passed. Full suite before: 938 passed, 10 skipped, 0 failed (92.62 seconds);
+after: 938 passed, 10 skipped, 0 failed (90.30 seconds). The extractor package
+has no imports of COM/pywin32, SQLite, or `src.storage`; direct DXF extraction
+requires neither ODA nor a running AutoCAD process. Real ODA conversion was not
+executed. Changed files: `src/cad/extractor/__init__.py`,
+`src/cad/extractor/dxf_extractor.py`, `src/cad/extractor/oda.py`,
+`tests/project/test_extractor.py`, and this log; created
+`src/cad/extractor/converter.py`. The pre-existing Step 8 worktree changes
+remain untouched.
