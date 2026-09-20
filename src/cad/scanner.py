@@ -10,6 +10,7 @@ from src.cad.extractor.oda import ODAConverter
 from src.storage.database import connection
 from src.storage.project_repository import get_project, now
 from src.storage.entity_repository import store_snapshot
+from src.cad.locks import serialized
 
 
 def file_hash(path):
@@ -47,6 +48,7 @@ def _store_snapshot(conn, drawing_id, snapshot):
     store_snapshot(conn, drawing_id, snapshot)
 
 
+@serialized
 def scan_project(project_id, *, extractor_factory=configured_extractor, max_workers=None):
     project = get_project(project_id)
     if project["status"] != "active":

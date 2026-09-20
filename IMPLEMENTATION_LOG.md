@@ -154,3 +154,17 @@ executed. Changed files: `src/cad/extractor/__init__.py`,
 `tests/project/test_extractor.py`, and this log; created
 `src/cad/extractor/converter.py`. The pre-existing Step 8 worktree changes
 remain untouched.
+
+## Step 3 follow-up — direct extraction-call proof and COM-free scan lock (2026-09-20)
+The incremental scanner from commit `f1395ef` already implemented stat →
+conditional SHA-256 → conditional extraction, process-based offline reads and
+parent-only database writes. Added a test in `tests/project/test_scanner.py`
+that spies on `DXFExtractor.extract`: four calls for four fixture DXFs on the
+first scan and zero more on an unchanged second scan. Moved the shared lock to
+new `src/cad/locks.py`; `src/cad/session.py` re-exports it for existing writers,
+and `src/cad/scanner.py` imports only that neutral module. A source check found
+no win32com, pythoncom, AutoCAD session, or document-opening call in the scanner
+or lock module. Focused scanner tests: 6 passed. Full suite before: 938 passed,
+10 skipped, 0 failed (85.56 seconds); after: 939 passed, 10 skipped, 0 failed
+(93.64 seconds). The existing uncommitted Step 8 backup-directory exclusion in
+`scanner.py` was preserved but not staged in this Step 3 commit.

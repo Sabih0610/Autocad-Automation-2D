@@ -22,6 +22,29 @@ def test_parallel_scan_and_unchanged_rescan_do_no_extraction(tmp_path, monkeypat
     assert scanner.scan_project(project, extractor_factory=forbidden)["skipped"] == 3
 
 
+def test_extractor_call_count_stays_zero_on_unchanged_rescan(tmp_path, monkeypatch):
+    for index in range(4):
+        make_dxf(tmp_path / f"{index}.dxf")
+    project = register_project("Plant", str(tmp_path))
+    original_extract = DXFExtractor.extract
+    extracted_paths = []
+
+    def counted_extract(self, source):
+        extracted_paths.append(str(source))
+        return original_extract(self, source)
+
+    monkeypatch.setattr(DXFExtractor, "extract", counted_extract)
+    first = scanner.scan_project(project, max_workers=1)
+    assert first["extracted"] == 4
+    assert len(extracted_paths) == 4
+    assert len(scanner.list_drawings(project)) == 4
+
+    second = scanner.scan_project(project, max_workers=1)
+    assert second["skipped"] == 4
+    assert second["extracted"] == 0
+    assert len(extracted_paths) == 4  # no extractor call on the second scan
+
+
 def test_dwg_folder_uses_fake_converter_and_reextracts_zero(tmp_path):
     root = tmp_path / "plant"
     root.mkdir()

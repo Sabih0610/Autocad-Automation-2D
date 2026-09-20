@@ -1,19 +1,9 @@
 """One COM critical section; documents are resolved by path, never by focus."""
 from contextlib import contextmanager
-from functools import wraps
 import os
 from pathlib import Path
-from threading import RLock
 
-CAD_LOCK = RLock()
-
-
-def serialized(function):
-    @wraps(function)
-    def wrapped(*args, **kwargs):
-        with CAD_LOCK:
-            return function(*args, **kwargs)
-    return wrapped
+from .locks import CAD_LOCK, serialized
 
 
 def canonical_path(path):
