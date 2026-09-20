@@ -17,7 +17,7 @@ from tests.project.test_modification import resize
 def managed(tmp_path, monkeypatch):
     path = tmp_path / "a.dxf"
     handle = make_dxf(path)
-    project = register_project("Plant", str(tmp_path))["project_id"]
+    project = register_project("Plant", str(tmp_path))
     scan_project(project, max_workers=1)
     monkeypatch.setattr(engine, "point", tuple)
     acad = Acad()

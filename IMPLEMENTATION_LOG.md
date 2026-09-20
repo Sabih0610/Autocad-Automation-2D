@@ -94,3 +94,45 @@ live AutoCAD close/restore remains unverified. Review: no delete/recreate, impli
 target or LLM additions. Existing generation approval caches remain compatible;
 new project operations use the shared mechanism. Only our added script include
 is staged in sketch.html; the user's pre-existing changes remain uncommitted.
+
+## Step 1 follow-up — explicit project-ID return contract (2026-09-20)
+The latest request narrowed this pass to Step 1. The actual checkout already had
+Steps 1–7 committed and unfinished Step 8 work; that work was preserved rather
+than rebuilt or removed. Windows and installed pywin32 were confirmed. Fresh
+baseline: **935 passed, 10 skipped, 0 failed** (111.75 seconds). Corrected
+`register_project(name, root_path)` to return the project ID string, as explicitly
+requested; callers needing a record use `get_project(project_id)`. Added three
+storage regression tests proving all eleven required tables share the existing
+jobs connection/database, existing jobs schema/indexes/rows and logging survive
+initialization, and multiple registrations persist. The original registration
+test now explicitly asserts the string-ID contract. Full suite after changes:
+**938 passed, 10 skipped, 0 failed** (93.25 seconds). Step 1 definition of done met.
+
+No files were created in this follow-up. Exact changed-file inventory:
+
+- `src/storage/project_repository.py` — return the ID instead of the row.
+- `tests/project/test_storage.py` — contract and additive-schema/audit regression tests.
+- `tests/project/test_changes.py` — consume the returned ID directly.
+- `tests/project/test_entity_index.py` — consume the returned ID directly.
+- `tests/project/test_modification.py` — consume the returned ID directly.
+- `tests/project/test_scanner.py` — consume the returned ID directly.
+- `tests/project/test_spatial.py` — consume the returned ID directly.
+- `src/api/routes/projects.py` — preserve the existing work-in-progress API response
+  shape by fetching the registered record by ID; this file remains part of the
+  uncommitted Step 8 work, not the Step 1 follow-up commit.
+- `IMPLEMENTATION_LOG.md` — this record.
+
+The pre-existing Step 1 implementation files were created in commit `7c58cc5`:
+`src/storage/__init__.py`, `src/storage/database.py`,
+`src/storage/project_repository.py`, `src/storage/schema.sql`,
+`tests/project/conftest.py`, `tests/project/test_storage.py`, and this log.
+That initial Step 1 ran from 892 passed/10 skipped to 895 passed/10 skipped.
+
+Review: no changes to `src/logging/db.py` or `src/api/main.py` in this follow-up;
+their SHA256 hashes remained respectively
+`2A072529843BBE289252C40B29C4F20855BDB21991CCF68422B5FD53BCB2B091` and
+`CD46C28F39AEE2A9A26BD605AE6446C3CA63E4AEFA83E06975ED1A02DD4106A6`.
+No second production database, no jobs-table alterations, no new audit middleware
+behavior. Previously authored later-step middleware edits remain in the working
+tree and are outside this follow-up. Step 8 is not claimed complete; Step 9 has
+not been implemented or measured.

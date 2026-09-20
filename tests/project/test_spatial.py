@@ -18,7 +18,7 @@ def test_nearby_100mm_and_rescan_invalidation(tmp_path, use_rtree):
     nearby = doc.modelspace().add_circle((500, 100, 0), 2)
     doc.modelspace().add_circle((500, 500, 0), 2)
     doc.saveas(path)
-    project = register_project("Plant", str(tmp_path))["project_id"]
+    project = register_project("Plant", str(tmp_path))
     scan_project(project, max_workers=1)
     pipe = find_by_tag(project, "P-101")[0]
     index = SpatialIndex(use_rtree=use_rtree)
@@ -34,7 +34,7 @@ def test_nearby_100mm_and_rescan_invalidation(tmp_path, use_rtree):
 def test_connections_and_cross_file_appearances_are_distinct(tmp_path):
     for name in ("a.dxf", "b.dxf"):
         make_dxf(tmp_path / name)
-    project = register_project("Plant", str(tmp_path))["project_id"]
+    project = register_project("Plant", str(tmp_path))
     scan_project(project, max_workers=1)
     pipe = find_by_tag(project, "P-101")[0]
     with connection() as conn:
@@ -58,7 +58,7 @@ def test_rtree_probe_falls_back_only_for_missing_extension():
 
 def test_rtree_query_plan_uses_virtual_index(tmp_path):
     make_dxf(tmp_path / "a.dxf")
-    project = register_project("Plant", str(tmp_path))["project_id"]
+    project = register_project("Plant", str(tmp_path))
     scan_project(project, max_workers=1)
     pipe = find_by_tag(project, "P-101")[0]
     with connection() as conn:

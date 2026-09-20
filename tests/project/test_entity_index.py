@@ -14,7 +14,7 @@ def test_tag_lookup_is_one_indexed_query_scoped_to_project(tmp_path, monkeypatch
         root = tmp_path / name
         root.mkdir()
         make_dxf(root / "a.dxf")
-        ids.append(register_project(name, str(root))["project_id"])
+        ids.append(register_project(name, str(root)))
         scan_project(ids[-1], max_workers=1)
     def forbidden(*args):
         pytest.fail("Lookup may not reopen drawings")
@@ -32,7 +32,7 @@ def test_tag_lookup_is_one_indexed_query_scoped_to_project(tmp_path, monkeypatch
 def test_rescan_keeps_ids_and_removes_deleted_entities(tmp_path):
     path = tmp_path / "a.dxf"
     handle = make_dxf(path)
-    project = register_project("Plant", str(tmp_path))["project_id"]
+    project = register_project("Plant", str(tmp_path))
     scan_project(project, max_workers=1)
     before = find_by_tag(project, "P-101")[0]
     doc = ezdxf.readfile(path)
@@ -51,7 +51,7 @@ def test_rescan_keeps_ids_and_removes_deleted_entities(tmp_path):
 def test_bad_snapshot_rolls_back_and_scan_errors_hide_stale_index(tmp_path):
     path = tmp_path / "a.dxf"
     make_dxf(path)
-    project = register_project("Plant", str(tmp_path))["project_id"]
+    project = register_project("Plant", str(tmp_path))
     scan_project(project, max_workers=1)
     drawing = list_drawings(project)[0]
     snapshot = DXFExtractor().extract(path)

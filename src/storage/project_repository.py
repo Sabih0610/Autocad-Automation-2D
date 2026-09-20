@@ -9,7 +9,8 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def register_project(name: str, root_path: str) -> dict:
+def register_project(name: str, root_path: str) -> str:
+    """Register an existing root without scanning it and return its project ID."""
     root = Path(root_path).expanduser().resolve(strict=True)
     if not root.is_dir() or not name.strip():
         raise ValueError("A project requires a non-empty name and an existing folder")
@@ -17,7 +18,7 @@ def register_project(name: str, root_path: str) -> dict:
                    status="active", created_at=now(), updated_at=now())
     with connection() as conn:
         conn.execute("INSERT INTO projects VALUES (:project_id,:name,:root_path,:status,:created_at,:updated_at)", project)
-    return project
+    return project["project_id"]
 
 
 def list_projects() -> list[dict]:
