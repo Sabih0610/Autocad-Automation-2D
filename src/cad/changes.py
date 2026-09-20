@@ -84,6 +84,7 @@ class ChangeManager:
                 if path not in rename_paths and not get_document(acad, path).Saved:
                     raise ValueError("Save or discard existing unsaved edits before applying changes")
             change_id = uuid4().hex
+            backups = {}
             with connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 for path in targets:
@@ -96,6 +97,7 @@ class ChangeManager:
                     backup = backup_file(Path(path))
                     if file_hash(backup) != row["file_hash"]:
                         raise ValueError("Drawing changed while creating the backup")
+                    backups[path] = str(backup)
                     conn.execute("INSERT INTO change_set_files VALUES (?,?,?,?,?,?,NULL,?)",
                                  (change_id, row["drawing_id"], path, path, str(backup), row["file_hash"], int(path not in rename_paths)))
             active_path = None
@@ -105,7 +107,8 @@ class ChangeManager:
                     row = targets[active_path]
                     if on_item:
                         on_item(index, "running", None)
-                    result = execute_operation(op, acad=acad, verify_extractor=self.extractor_factory(), _backup=False)
+                    result = execute_operation(op, acad=acad, verify_extractor=self.extractor_factory(),
+                                               _preexisting_backup_path=backups[active_path])
                     current_path = result["path"]
                     self._record_file(change_id, row["drawing_id"], current_path)
                     with connection() as conn:

@@ -218,3 +218,20 @@ AutoCAD session is invoked. Focused tests: 20 passed. Full suite before:
 941 passed, 10 skipped, 0 failed (117.56 seconds); after: 946 passed,
 10 skipped, 0 failed (93.25 seconds). Changed files: this log and
 `tests/project/test_modification.py`; no production code change was needed.
+
+## Step 7 follow-up — mandatory backup and re-extraction proof (2026-09-20)
+The whole-file ChangeSet, audit rows, KEEP, and REVERT were already implemented
+in `777dd57`. Removed the structured executor's `_backup=False` bypass: direct
+operations call `backup_file()` before their first COM assignment or rename,
+while `ChangeManager` supplies the separately verified pre-edit backup path it
+created before applying operations. A supplied backup must be a distinct,
+existing file. Tests spy on all five Step 6 operation types (including custom
+SummaryInfo) to prove backup ordering, verify `change_set_items` and
+`validation_results`, and re-extract a reverted DXF to compare entities,
+properties, and geometry with the pre-edit snapshot. KEEP leaves saved file
+bytes unchanged. Focused tests: 35 passed. Full suite before: 946 passed,
+10 skipped, 0 failed (97.78 seconds); after: 953 passed, 10 skipped,
+0 failed (95.20 seconds). Changed files: this log, `src/cad/changes.py`,
+`src/framework/commands/modification_executor.py`, and
+`tests/project/test_changes.py`. The older creation/edit-plan backup gap is
+outside this structured-path follow-up.

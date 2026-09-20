@@ -187,13 +187,23 @@ def rename_file(op):
     return dict(path=str(destination), changes=[dict(handle=None, field="path", before=str(source), after=str(destination))])
 
 
-def execute_operation(operation, *, acad=None, entity_id=None, verify_extractor=None, _backup=True):
+def _backup_before_edit(path, preexisting_backup_path):
+    if preexisting_backup_path is not None:
+        backup = Path(preexisting_backup_path).resolve(strict=True)
+        if not backup.is_file() or backup == Path(path):
+            raise ValueError("A separate, existing backup file is required before editing")
+        return str(backup)
+    from src.backup import backup_file
+    return str(backup_file(Path(path)))
+
+
+def execute_operation(operation, *, acad=None, entity_id=None, verify_extractor=None,
+                      _preexisting_backup_path=None):
     validate_operation(operation)
     path = canonical_path(operation["target_dwg_path"])
     with CAD_LOCK:
         if operation["command"] == "RENAME_FILE":
-            from src.backup import backup_file
-            backup = str(backup_file(Path(path))) if _backup else None
+            backup = _backup_before_edit(path, _preexisting_backup_path)
             return dict(rename_file(operation), backup_path=backup)
         record = _indexed_record(path, operation["handle"], entity_id) if "handle" in operation else None
         if record:
@@ -203,8 +213,7 @@ def execute_operation(operation, *, acad=None, entity_id=None, verify_extractor=
             if not doc.Saved:
                 raise ValueError("Save or discard existing unsaved edits before modifying this drawing")
             changes = _prepare(doc, operation, record)
-            from src.backup import backup_file
-            backup = str(backup_file(Path(path))) if _backup else None
+            backup = _backup_before_edit(path, _preexisting_backup_path)
             applied = []
             custom = operation["command"] == "SET_DOCUMENT_PROPERTY" and operation["property"] == "custom"
             try:
