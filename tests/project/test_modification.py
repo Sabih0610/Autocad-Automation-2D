@@ -75,6 +75,18 @@ def test_command_schema_accepts_structured_operation_and_requires_target(drawing
     assert validate_command_sequence(envelope)
 
 
+@pytest.mark.parametrize("operation", [
+    {"command": "RESIZE_COMPONENT", "handle": "AA", "dimension": "length", "delta_mm": 50},
+    {"command": "SET_ENTITY_PROPERTY", "handle": "AA", "property": "color", "value": 3},
+    {"command": "SET_DOCUMENT_PROPERTY", "property": "author", "value": "Engineer"},
+    {"command": "SET_LAYER_COLOR", "layer": "0", "color": 2},
+    {"command": "RENAME_FILE", "new_name": "renamed.dwg"},
+])
+def test_every_structured_command_requires_an_explicit_target(operation):
+    with pytest.raises(ValidationError):
+        validate_operation(operation)
+
+
 def test_negative_resize_unsaved_and_stale_drawing_are_rejected(drawing):
     path, handle, _ = drawing
     original = path.read_bytes()
@@ -94,6 +106,10 @@ def test_negative_resize_unsaved_and_stale_drawing_are_rejected(drawing):
 
 def test_property_layer_document_and_attribute_edits(drawing):
     path, handle, project = drawing
+    data = ezdxf.readfile(path)
+    data.layers.new("PIPES")
+    data.saveas(path)
+    scan_project(project, max_workers=1)
     acad = Acad()
     def apply(**fields):
         result = engine.execute_operation(dict(fields, target_dwg_path=str(path)), acad=acad)
@@ -101,10 +117,19 @@ def test_property_layer_document_and_attribute_edits(drawing):
         return result
     apply(command="SET_ENTITY_PROPERTY", handle=handle, property="color", value=3)
     assert DXFExtractor().extract_properties(path)[handle]["color"] == 3
+    apply(command="SET_ENTITY_PROPERTY", handle=handle, property="layer", value="PIPES")
+    assert DXFExtractor().extract_properties(path)[handle]["layer"] == "PIPES"
+    apply(command="SET_ENTITY_PROPERTY", handle=handle, property="linetype", value="CONTINUOUS")
+    assert DXFExtractor().extract_properties(path)[handle]["linetype"] == "CONTINUOUS"
+    text_handle = next(e.handle for e in DXFExtractor().extract_entities(path) if e.entity_type == "TEXT")
+    apply(command="SET_ENTITY_PROPERTY", handle=text_handle, property="text", value="Revised Header")
+    assert DXFExtractor().extract_properties(path)[text_handle]["text"] == "Revised Header"
     apply(command="SET_LAYER_COLOR", layer="0", color=2)
     assert ezdxf.readfile(path).layers.get("0").dxf.color == 2
     apply(command="SET_DOCUMENT_PROPERTY", property="title", value="Plant")
     assert acad.Documents.documents[0].SummaryInfo.Title == "Plant"
+    apply(command="SET_DOCUMENT_PROPERTY", property="author", value="Engineer")
+    assert acad.Documents.documents[0].SummaryInfo.Author == "Engineer"
     valve = find_by_tag(project, "V-101")[0]
     apply(command="SET_ENTITY_PROPERTY", handle=valve["handle"], property="attribute", attribute_tag="TAG", value="V-102")
     assert len(find_by_tag(project, "V-102")) == 1

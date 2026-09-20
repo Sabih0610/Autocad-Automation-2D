@@ -201,3 +201,20 @@ Changed files: this log, `src/cad/relationships.py`, `src/storage/database.py`,
 `src/storage/entity_repository.py`, `src/storage/schema.sql`, and
 `tests/project/test_spatial.py`; created `src/storage/relationship_schema.py`.
 Pre-existing worktree edits remain untouched.
+
+## Step 6 follow-up — explicit-target and in-place edit proof (2026-09-20)
+The structured command variants, in-place COM executor, targeted inspector,
+and filesystem-only rename guard were already implemented in `f97ce29`.
+Expanded `tests/project/test_modification.py` to require an explicit drawing
+path for all five structured operation types and to exercise direct `Layer`,
+`Linetype`, `TextString`, `SummaryInfo.Author`, `Color`, and layer-color writes
+through the COM-shaped DXF fixture. The existing 50 mm resize test verifies
+the same handle survives, fake `Documents.Open` receives the explicit file
+instead of using `ActiveDocument`, and re-extraction reads the new 1050 mm
+endpoint. Source
+review found no delete, erase, or entity-creation call in the structured path.
+The rename test confirms the open-session index blocks an in-use file and no
+AutoCAD session is invoked. Focused tests: 20 passed. Full suite before:
+941 passed, 10 skipped, 0 failed (117.56 seconds); after: 946 passed,
+10 skipped, 0 failed (93.25 seconds). Changed files: this log and
+`tests/project/test_modification.py`; no production code change was needed.
