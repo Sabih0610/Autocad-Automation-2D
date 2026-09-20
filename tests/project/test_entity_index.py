@@ -1,5 +1,6 @@
 import ezdxf
 import pytest
+from pathlib import Path
 from src.cad.scanner import scan_project, list_drawings
 from src.cad.extractor import DXFExtractor
 from src.storage.database import connection
@@ -46,6 +47,57 @@ def test_rescan_keeps_ids_and_removes_deleted_entities(tmp_path):
     doc.saveas(path)
     scan_project(project, max_workers=1)
     assert find_by_tag(project, "P-101") == []
+
+
+def test_entities_query_survives_unchanged_and_replaced_rescans(tmp_path, monkeypatch):
+    path = tmp_path / "a.dxf"
+    old_handle = make_dxf(path)
+    project = register_project("Plant", str(tmp_path))
+    assert scan_project(project, max_workers=1)["extracted"] == 1
+    drawing_id = list_drawings(project)[0]["drawing_id"]
+
+    def tag_drawings(tag):
+        with connection() as conn:
+            return [row[0] for row in conn.execute(
+                "SELECT DISTINCT drawing_id FROM entities WHERE tag=? COLLATE NOCASE", (tag,))]
+
+    def index_counts():
+        with connection() as conn:
+            return tuple(conn.execute(query, (drawing_id,)).fetchone()[0] for query in (
+                "SELECT count(*) FROM entities WHERE drawing_id=?",
+                "SELECT count(*) FROM entity_properties p JOIN entities e USING (entity_id) WHERE e.drawing_id=?",
+                "SELECT count(*) FROM entity_geometry g JOIN entities e USING (entity_id) WHERE e.drawing_id=?",
+            ))
+
+    with monkeypatch.context() as patch:
+        def forbidden(*args, **kwargs):
+            pytest.fail("SQLite tag lookup must not open or extract a drawing")
+
+        patch.setattr(DXFExtractor, "extract", forbidden)
+        patch.setattr(Path, "open", forbidden)
+        assert tag_drawings("P-101") == [drawing_id]
+
+    before = index_counts()
+    assert before[0] > 0 and before[1] > 0 and before[2] > 0
+    assert scan_project(project, max_workers=1)["extracted"] == 0
+    assert index_counts() == before
+
+    old_entity_id = find_by_tag(project, "P-101")[0]["entity_id"]
+    doc = ezdxf.readfile(path)
+    doc.modelspace().delete_entity(doc.entitydb[old_handle])
+    replacement = doc.modelspace().add_line((0, 0, 0), (1050, 0, 0))
+    replacement.set_xdata("AUTOCAD_AI", [(1000, "TAG=P-202")])
+    doc.saveas(path)
+    assert scan_project(project, max_workers=1)["extracted"] == 1
+    assert tag_drawings("P-101") == []
+    assert tag_drawings("P-202") == [drawing_id]
+    assert index_counts() == before
+    with connection() as conn:
+        for table in ("entities", "entity_properties", "entity_geometry"):
+            assert conn.execute(
+                f"SELECT count(*) FROM {table} WHERE entity_id=?", (old_entity_id,)
+            ).fetchone()[0] == 0
+    assert find_by_tag(project, "P-202")[0]["end_x"] == 1050
 
 
 def test_bad_snapshot_rolls_back_and_scan_errors_hide_stale_index(tmp_path):

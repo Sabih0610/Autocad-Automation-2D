@@ -168,3 +168,18 @@ or lock module. Focused scanner tests: 6 passed. Full suite before: 938 passed,
 10 skipped, 0 failed (85.56 seconds); after: 939 passed, 10 skipped, 0 failed
 (93.64 seconds). The existing uncommitted Step 8 backup-directory exclusion in
 `scanner.py` was preserved but not staged in this Step 3 commit.
+
+## Step 4 follow-up — direct entity-index replacement proof (2026-09-20)
+The scanner's transactional snapshot persistence was already implemented in
+`27f2d65`: extraction writes `entities`, `entity_properties`, and
+`entity_geometry`, replacing prior values for the drawing. Added one fixture
+integration test in `tests/project/test_entity_index.py` that finds `P-101`
+with `SELECT DISTINCT drawing_id FROM entities WHERE tag=? COLLATE NOCASE`,
+while drawing-opening and extraction methods are forbidden. The test then
+confirms an unchanged rescan leaves all three table counts unchanged, and a
+changed DXF replaces `P-101` with `P-202`, removes the old entity's property
+and geometry rows, and indexes the new endpoint. Focused tests: 4 passed.
+Full suite before: 939 passed, 10 skipped, 0 failed (92.47 seconds); after:
+940 passed, 10 skipped, 0 failed (91.34 seconds). Changed files: this log and
+`tests/project/test_entity_index.py`. No production scanner or repository code
+needed changes. Other pre-existing worktree edits remain untouched.
