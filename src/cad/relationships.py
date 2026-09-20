@@ -26,3 +26,10 @@ def related_entities(conn, eid, relationship_type="connected_to"):
         JOIN drawings d ON d.drawing_id=e.drawing_id
         WHERE r.source_entity_id=? AND r.relationship_type=? AND d.scan_status='scanned'
         ORDER BY e.entity_id""", (eid, relationship_type))]
+
+
+def related_drawings(conn, eid):
+    return [dict(row) for row in conn.execute("""SELECT d.* FROM relationships r
+        JOIN drawings d ON d.drawing_id=r.target_drawing_id
+        WHERE r.source_entity_id=? AND r.relationship_type='appears_in'
+        AND d.scan_status='scanned' ORDER BY d.drawing_id""", (eid,))]

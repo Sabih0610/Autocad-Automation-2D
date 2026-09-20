@@ -54,8 +54,9 @@ CREATE TABLE IF NOT EXISTS entity_geometry (
 CREATE TABLE IF NOT EXISTS relationships (
     source_entity_id TEXT NOT NULL REFERENCES entities(entity_id),
     relationship_type TEXT NOT NULL,   -- connected_to | appears_in | represented_in | depends_on
-    target_entity_id  TEXT NOT NULL REFERENCES entities(entity_id),
-    PRIMARY KEY (source_entity_id, relationship_type, target_entity_id)
+    target_entity_id  TEXT REFERENCES entities(entity_id),
+    target_drawing_id TEXT REFERENCES drawings(drawing_id),
+    CHECK ((target_entity_id IS NULL) != (target_drawing_id IS NULL))
 );
 
 -- Multi-file job fan-out: one AI plan, many job_items, consumed by the write queue.

@@ -45,9 +45,14 @@ def store_snapshot(conn, drawing_id, snapshot):
     conn.execute("INSERT INTO drawing_metadata VALUES (?,?,?) ON CONFLICT(drawing_id) DO UPDATE SET units=excluded.units,payload=excluded.payload",
                  (drawing_id, snapshot.document.units, json.dumps(asdict(snapshot.document), allow_nan=False)))
     for relation in snapshot.relationships:
-        conn.execute("INSERT OR IGNORE INTO relationships VALUES (?,?,?)",
+        conn.execute("""INSERT OR IGNORE INTO relationships
+            (source_entity_id,relationship_type,target_entity_id) VALUES (?,?,?)""",
                      (ids[relation.source_handle], relation.relationship_type, ids[relation.target_handle]))
-    # Same tag in another drawing is an appearance, never spatial connectivity.
+    for eid in ids.values():
+        conn.execute("""INSERT OR IGNORE INTO relationships
+            (source_entity_id,relationship_type,target_drawing_id)
+            VALUES (?,'appears_in',?)""", (eid, drawing_id))
+    # Same tag in another drawing is a representation, never spatial connectivity.
     for entity in snapshot.entities:
         if not entity.tag:
             continue
@@ -57,7 +62,9 @@ def store_snapshot(conn, drawing_id, snapshot):
                               (entity.tag, drawing_id, drawing_id)).fetchall()
         for other in others:
             for source, target in ((ids[entity.handle], other[0]), (other[0], ids[entity.handle])):
-                conn.execute("INSERT OR IGNORE INTO relationships VALUES (?,'appears_in',?)", (source, target))
+                conn.execute("""INSERT OR IGNORE INTO relationships
+                    (source_entity_id,relationship_type,target_entity_id)
+                    VALUES (?,'represented_in',?)""", (source, target))
 
 
 TAG_QUERY = """SELECT e.*, d.path, d.project_id, d.file_hash, m.units,

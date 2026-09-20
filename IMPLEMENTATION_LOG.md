@@ -183,3 +183,21 @@ Full suite before: 939 passed, 10 skipped, 0 failed (92.47 seconds); after:
 940 passed, 10 skipped, 0 failed (91.34 seconds). Changed files: this log and
 `tests/project/test_entity_index.py`. No production scanner or repository code
 needed changes. Other pre-existing worktree edits remain untouched.
+
+## Step 5 follow-up — drawing membership edges (2026-09-20)
+Endpoint/insertion-point connectivity and the R*Tree/cKDTree spatial query were
+already implemented in `df4342a`. The roadmap's entity-only relationship target
+cannot represent an entity appearing in a drawing, so `relationships` now also
+allows `target_drawing_id`. A migration preserves legacy edges and renames the
+old cross-file same-tag `appears_in` relation to `represented_in`; each indexed
+entity receives an `appears_in` edge to its actual drawing. Partial unique
+indexes maintain edge uniqueness. New tests cover membership, migration, and
+the cKDTree fallback; existing tests cover coincident connectivity, 100 mm
+proximity and the R*Tree virtual-index query plan. The actual SQLite build
+accepted `CREATE VIRTUAL TABLE ... USING rtree`, so R*Tree is active here.
+Focused tests: 10 passed. Full suite before: 940 passed, 10 skipped, 0 failed
+(90.66 seconds); after: 941 passed, 10 skipped, 0 failed (91.20 seconds).
+Changed files: this log, `src/cad/relationships.py`, `src/storage/database.py`,
+`src/storage/entity_repository.py`, `src/storage/schema.sql`, and
+`tests/project/test_spatial.py`; created `src/storage/relationship_schema.py`.
+Pre-existing worktree edits remain untouched.
