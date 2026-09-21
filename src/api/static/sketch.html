@@ -262,17 +262,66 @@
       padding: 0;
     }
 
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 14px;
-    }
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
 
-    .build-button {
-      background: var(--success);
-      color: #ffffff;
-    }
+.change-set-panel {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 14px;
+  padding: 12px;
+}
+
+.change-set-panel.info {
+  color: var(--muted);
+}
+
+.change-set-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.change-set-button {
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 9px 12px;
+}
+
+.change-set-button.revert {
+  background: transparent;
+  border: 1px solid rgba(248, 81, 73, 0.75);
+  color: #ffb4ad;
+}
+
+.change-set-button.keep {
+  background: var(--success);
+  color: #ffffff;
+}
+
+.change-set-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.change-set-status {
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.build-button {
+  background: var(--success);
+  color: #ffffff;
+}
 
     .build-button.danger {
       background: transparent;
@@ -430,24 +479,150 @@
       chat.scrollTop = chat.scrollHeight;
     }
 
-    function createMessage(role, content, options = {}) {
-      const wrapper = document.createElement("div");
-      wrapper.className = `message ${role}${options.error ? " error" : ""}`;
+function createMessage(role, content, options = {}) {
+  const wrapper = document.createElement("div");
+  wrapper.className = `message ${role}${options.error ? " error" : ""}`;
 
-      const bubble = document.createElement("div");
-      bubble.className = "bubble";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
 
-      if (options.html) {
-        bubble.innerHTML = content;
-      } else {
-        bubble.textContent = content;
-      }
+  if (options.html) {
+    bubble.innerHTML = content;
+  } else {
+    bubble.textContent = content;
+  }
 
-      wrapper.appendChild(bubble);
-      messages.appendChild(wrapper);
-      scrollToBottom();
-      return bubble;
+  wrapper.appendChild(bubble);
+  messages.appendChild(wrapper);
+  scrollToBottom();
+  return bubble;
+}
+
+function changeSetControlsHtml(data) {
+  const changeSetId = data?.change_set_id;
+  const skippedReason = data?.change_set_skipped_reason;
+
+  if (changeSetId) {
+    return `
+      <div class="change-set-panel">
+        <div class="meta-row"><strong>Change set:</strong> ${escapeText(changeSetId)}</div>
+        <div class="change-set-status">This write can be kept or reverted.</div>
+        <div class="change-set-actions">
+          <button class="change-set-button revert" type="button">Revert</button>
+          <button class="change-set-button keep" type="button">Keep</button>
+        </div>
+      </div>
+    `;
+  }
+
+  if (skippedReason) {
+    return `
+      <div class="change-set-panel info">
+        <div class="meta-row"><strong>Change history:</strong> ${escapeText(skippedReason)}</div>
+      </div>
+    `;
+  }
+
+  return "";
+}
+
+async function performChangeSetAction(changeSetId, action, panel) {
+  const revertButton = panel.querySelector(".change-set-button.revert");
+  const keepButton = panel.querySelector(".change-set-button.keep");
+  const status = panel.querySelector(".change-set-status");
+  const buttons = [revertButton, keepButton].filter(Boolean);
+
+  buttons.forEach((button) => {
+    button.disabled = true;
+  });
+
+  if (status) {
+    status.textContent =
+      action === "revert"
+        ? "Reverting change set..."
+        : "Keeping change set...";
+  }
+
+  try {
+    const response = await fetch(
+      `/api/change-sets/${encodeURIComponent(changeSetId)}/${action}`,
+      { method: "POST" }
+    );
+
+    const data = await readJson(response);
+
+    if (!response.ok) {
+      throw new Error(
+        errorMessage(data, `Could not ${action} this change set.`)
+      );
     }
+
+    if (status) {
+      status.textContent =
+        action === "revert"
+          ? "Reverted. The backed-up drawing has been restored."
+          : "Kept. This change set is now final.";
+    }
+
+    const actions = panel.querySelector(".change-set-actions");
+
+    if (actions) {
+      actions.remove();
+    }
+  } catch (error) {
+    if (status) {
+      status.textContent = String(error.message || error);
+    }
+
+    buttons.forEach((button) => {
+      button.disabled = false;
+    });
+  }
+}
+
+function bindChangeSetActions(bubble, data) {
+  const changeSetId = data?.change_set_id;
+
+  if (!changeSetId) {
+    return;
+  }
+
+  const panel = bubble.querySelector(".change-set-panel");
+
+  if (!panel) {
+    return;
+  }
+
+  const revertButton = panel.querySelector(".change-set-button.revert");
+  const keepButton = panel.querySelector(".change-set-button.keep");
+
+  if (revertButton) {
+    revertButton.addEventListener("click", () => {
+      performChangeSetAction(changeSetId, "revert", panel);
+    });
+  }
+
+  if (keepButton) {
+    keepButton.addEventListener("click", () => {
+      performChangeSetAction(changeSetId, "keep", panel);
+    });
+  }
+}
+
+function createResultMessage(data, content, options = {}) {
+  const bubble = createMessage(
+    "assistant",
+    `${content}${changeSetControlsHtml(data)}`,
+    {
+      html: true,
+      error: Boolean(options.error)
+    }
+  );
+
+  bindChangeSetActions(bubble, data);
+
+  return bubble;
+}
 
     function formatIssue(issue) {
       const severity = issue.severity || "INFO";
@@ -1306,55 +1481,85 @@
       });
     }
 
-    async function buildInAutoCAD(plan, button) {
-      button.disabled = true;
-      button.textContent = "Building...";
+async function buildInAutoCAD(plan, button) {
+  button.disabled = true;
+  button.textContent = "Building...";
 
-      const status = createMessage(
-        "system",
-        "Connecting to AutoCAD...\nExecuting commands...\nZooming to generated drawing..."
+  const status = createMessage(
+    "system",
+    "Connecting to AutoCAD...\nExecuting commands...\nZooming to generated drawing..."
+  );
+
+  try {
+    const response = await fetch("/api/sketch/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: plan.token,
+        save: false,
+        target_dwg_path: null,
+        use_active_document: true
+      })
+    });
+
+    const data = await readJson(response);
+
+    if (response.status === 503) {
+      status.textContent =
+        "AutoCAD is not reachable. Open AutoCAD with a drawing active, then click Build again.";
+
+      button.disabled = false;
+      button.textContent =
+        plan.verifier_verdict === "REJECT"
+          ? "Build Anyway"
+          : "Build in AutoCAD";
+
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        errorMessage(data, "Could not build in AutoCAD.")
+      );
+    }
+
+    if (!data.ok) {
+      status.textContent =
+        "AutoCAD reported execution issues. Review the details below.";
+
+      createResultMessage(
+        data,
+        buildResultHtml(data),
+        { error: true }
       );
 
-      try {
-        const response = await fetch("/api/sketch/approve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            token: plan.token,
-            save: false,
-            target_dwg_path: null
-          })
-        });
-        const data = await readJson(response);
+      button.disabled = false;
+      button.textContent =
+        plan.verifier_verdict === "REJECT"
+          ? "Build Anyway"
+          : "Build in AutoCAD";
 
-        if (response.status === 503) {
-          status.textContent = "AutoCAD is not reachable. Open AutoCAD with a drawing active, then click Build again.";
-          button.disabled = false;
-          button.textContent = plan.verifier_verdict === "REJECT" ? "Build Anyway" : "Build in AutoCAD";
-          return;
-        }
-
-        if (!response.ok) {
-          throw new Error(errorMessage(data, "Could not build in AutoCAD."));
-        }
-
-        if (!data.ok) {
-          status.textContent = "AutoCAD reported execution issues. Review the details below.";
-          createMessage("assistant", buildResultHtml(data), { html: true, error: true });
-          button.disabled = false;
-          button.textContent = plan.verifier_verdict === "REJECT" ? "Build Anyway" : "Build in AutoCAD";
-          return;
-        }
-
-        status.textContent = "Done.";
-        createMessage("assistant", buildResultHtml(data), { html: true });
-      } catch (error) {
-        status.textContent = "Build failed.";
-        createMessage("assistant", String(error.message || error), { error: true });
-        button.disabled = false;
-        button.textContent = plan.verifier_verdict === "REJECT" ? "Build Anyway" : "Build in AutoCAD";
-      }
+      return;
     }
+
+    status.textContent = "Done.";
+    createResultMessage(data, buildResultHtml(data));
+  } catch (error) {
+    status.textContent = "Build failed.";
+
+    createMessage(
+      "assistant",
+      String(error.message || error),
+      { error: true }
+    );
+
+    button.disabled = false;
+    button.textContent =
+      plan.verifier_verdict === "REJECT"
+        ? "Build Anyway"
+        : "Build in AutoCAD";
+  }
+}
 
     async function handlePIDRequest(prompt) {
       latestGeneration = null;
@@ -1400,54 +1605,73 @@
     }
 
     async function buildPIDInAutoCAD(plan, button) {
-      button.disabled = true;
-      button.textContent = "Building P&ID...";
+  button.disabled = true;
+  button.textContent = "Building P&ID...";
 
-      const status = createMessage(
-        "system",
-        "Connecting to AutoCAD...\nExecuting P&ID component commands...\nZooming to generated P&ID..."
+  const status = createMessage(
+    "system",
+    "Connecting to AutoCAD...\nExecuting P&ID component commands...\nZooming to generated P&ID..."
+  );
+
+  try {
+    const response = await fetch("/api/pid/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: plan.token,
+        save: false,
+        target_dwg_path: null,
+        use_active_document: true
+      })
+    });
+
+    const data = await readJson(response);
+
+    if (response.status === 503) {
+      status.textContent =
+        "AutoCAD is not running or no active drawing is open. Open AutoCAD and try Build again.";
+
+      button.disabled = false;
+      button.textContent = "Build P&ID in AutoCAD";
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        errorMessage(data, "Could not build the P&ID in AutoCAD.")
+      );
+    }
+
+    if (!data.ok) {
+      status.textContent =
+        "AutoCAD reported execution issues while building the P&ID.";
+
+      createResultMessage(
+        data,
+        pidBuildResultHtml(data),
+        { error: true }
       );
 
-      try {
-        const response = await fetch("/api/pid/approve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            token: plan.token,
-            save: false,
-            target_dwg_path: null
-          })
-        });
-        const data = await readJson(response);
-
-        if (response.status === 503) {
-          status.textContent = "AutoCAD is not running or no active drawing is open. Open AutoCAD and try Build again.";
-          button.disabled = false;
-          button.textContent = "Build P&ID in AutoCAD";
-          return;
-        }
-
-        if (!response.ok) {
-          throw new Error(errorMessage(data, "Could not build the P&ID in AutoCAD."));
-        }
-
-        if (!data.ok) {
-          status.textContent = "AutoCAD reported execution issues while building the P&ID.";
-          createMessage("assistant", pidBuildResultHtml(data), { html: true, error: true });
-          button.disabled = false;
-          button.textContent = "Build P&ID in AutoCAD";
-          return;
-        }
-
-        status.textContent = "Done.";
-        createMessage("assistant", pidBuildResultHtml(data), { html: true });
-      } catch (error) {
-        status.textContent = "P&ID build failed.";
-        createMessage("assistant", String(error.message || error), { error: true });
-        button.disabled = false;
-        button.textContent = "Build P&ID in AutoCAD";
-      }
+      button.disabled = false;
+      button.textContent = "Build P&ID in AutoCAD";
+      return;
     }
+
+    status.textContent = "Done.";
+    createResultMessage(data, pidBuildResultHtml(data));
+  } catch (error) {
+    status.textContent = "P&ID build failed.";
+
+    createMessage(
+      "assistant",
+      String(error.message || error),
+      { error: true }
+    );
+
+    button.disabled = false;
+    button.textContent = "Build P&ID in AutoCAD";
+  }
+}
 
     async function handleCAD3DRequest(prompt) {
       latestGeneration = null;
@@ -1496,166 +1720,254 @@
     }
 
     async function buildCAD3DInAutoCAD(plan, button) {
-      button.disabled = true;
-      button.textContent = "Building 3D model...";
+  button.disabled = true;
+  button.textContent = "Building 3D model...";
 
-      const status = createMessage(
-        "system",
-        "Connecting to AutoCAD...\nExecuting 3D CAD components...\nZooming to generated model..."
+  const status = createMessage(
+    "system",
+    "Connecting to AutoCAD...\nExecuting 3D CAD components...\nZooming to generated model..."
+  );
+
+  try {
+    const response = await fetch("/api/cad3d/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: plan.token,
+        save: false,
+        target_dwg_path: null,
+        use_active_document: true
+      })
+    });
+
+    const data = await readJson(response);
+
+    if (response.status === 503) {
+      status.textContent =
+        "AutoCAD is not running or no active drawing is open. Open AutoCAD and try Build again.";
+
+      button.disabled = false;
+      button.textContent = "Build 3D model in AutoCAD";
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        errorMessage(data, "Could not build the 3D model in AutoCAD.")
+      );
+    }
+
+    if (!data.ok) {
+      status.textContent =
+        "AutoCAD reported execution issues while building the 3D model.";
+
+      createResultMessage(
+        data,
+        cad3dBuildResultHtml(data),
+        { error: true }
       );
 
-      try {
-        const response = await fetch("/api/cad3d/approve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            token: plan.token,
-            save: false,
-            target_dwg_path: null
-          })
-        });
-        const data = await readJson(response);
-
-        if (response.status === 503) {
-          status.textContent = "AutoCAD is not running or no active drawing is open. Open AutoCAD and try Build again.";
-          button.disabled = false;
-          button.textContent = "Build 3D model in AutoCAD";
-          return;
-        }
-
-        if (!response.ok) {
-          throw new Error(errorMessage(data, "Could not build the 3D model in AutoCAD."));
-        }
-
-        if (!data.ok) {
-          status.textContent = "AutoCAD reported execution issues while building the 3D model.";
-          createMessage("assistant", cad3dBuildResultHtml(data), { html: true, error: true });
-          button.disabled = false;
-          button.textContent = "Build 3D model in AutoCAD";
-          return;
-        }
-
-        setLatestCAD3DToken(plan.token);
-        latestGeneration = {
-          token: plan.token,
-          type: "cad3d",
-          approveUrl: "/api/cad3d/approve",
-          editUrl: "/api/cad3d/edit"
-        };
-        status.textContent = "Done.";
-        createMessage("assistant", cad3dBuildResultHtml(data), { html: true });
-      } catch (error) {
-        status.textContent = "3D build failed.";
-        createMessage("assistant", String(error.message || error), { error: true });
-        button.disabled = false;
-        button.textContent = "Build 3D model in AutoCAD";
-      }
+      button.disabled = false;
+      button.textContent = "Build 3D model in AutoCAD";
+      return;
     }
+
+    setLatestCAD3DToken(plan.token);
+
+    latestGeneration = {
+      token: plan.token,
+      type: "cad3d",
+      approveUrl: "/api/cad3d/approve",
+      editUrl: "/api/cad3d/edit"
+    };
+
+    status.textContent = "Done.";
+
+    createResultMessage(
+      data,
+      cad3dBuildResultHtml(data)
+    );
+  } catch (error) {
+    status.textContent = "3D build failed.";
+
+    createMessage(
+      "assistant",
+      String(error.message || error),
+      { error: true }
+    );
+
+    button.disabled = false;
+    button.textContent = "Build 3D model in AutoCAD";
+  }
+}
 
     async function handleCAD3DEditRequest(prompt) {
-      const status = createMessage("system", "Planning CAD3D component edit...");
+  const status = createMessage(
+    "system",
+    "Planning CAD3D component edit..."
+  );
 
-      try {
-        let sourceToken = currentCAD3DToken();
-        if (!sourceToken) {
-          status.textContent = "Looking up the latest stored CAD3D scene...";
-          sourceToken = await fetchLatestCAD3DToken();
-        }
+  try {
+    let sourceToken = currentCAD3DToken();
 
-        status.textContent = "Applying CAD3D component edit and rebuilding the 3D model...";
+    if (!sourceToken) {
+      status.textContent =
+        "Looking up the latest stored CAD3D scene...";
 
-        const response = await fetch("/api/cad3d/edit", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt,
-            token: sourceToken,
-            execute: true,
-            save: false,
-            target_dwg_path: null,
-            create_new_token: true
-          })
-        });
-        const data = await readJson(response);
-
-        if (!response.ok) {
-          status.textContent = "CAD3D edit failed.";
-          throw new Error(cad3dEditApiErrorMessage(response, data));
-        }
-
-        if (data.edited_token) {
-          setLatestCAD3DToken(data.edited_token);
-          latestGeneration = {
-            token: data.edited_token,
-            type: "cad3d",
-            approveUrl: "/api/cad3d/approve",
-            editUrl: "/api/cad3d/edit"
-          };
-        }
-
-        if (!data.ok) {
-          status.textContent = "CAD3D edit ran, but AutoCAD reported issues.";
-          createMessage("assistant", cad3dEditResultHtml(data), { html: true, error: true });
-        } else {
-          const documentName = data.execution_result?.document_name || "the active drawing";
-          status.textContent = `Done — rebuilt ${documentName}.`;
-          createMessage("assistant", cad3dEditResultHtml(data), { html: true });
-        }
-
-        saveRecent({
-          prompt,
-          summary: data.edit_plan?.summary,
-          verdict: data.ok ? "cad3d edited" : "cad3d edit issues",
-          time: new Date().toLocaleString()
-        });
-      } catch (error) {
-        createMessage("assistant", String(error.message || error), { error: true });
-      }
+      sourceToken = await fetchLatestCAD3DToken();
     }
 
+    status.textContent =
+      "Applying CAD3D component edit and rebuilding the 3D model...";
+
+    const response = await fetch("/api/cad3d/edit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt,
+        token: sourceToken,
+        execute: true,
+        save: false,
+        target_dwg_path: null,
+        use_active_document: true,
+        create_new_token: true
+      })
+    });
+
+    const data = await readJson(response);
+
+    if (!response.ok) {
+      status.textContent = "CAD3D edit failed.";
+      throw new Error(
+        cad3dEditApiErrorMessage(response, data)
+      );
+    }
+
+    if (data.edited_token) {
+      setLatestCAD3DToken(data.edited_token);
+
+      latestGeneration = {
+        token: data.edited_token,
+        type: "cad3d",
+        approveUrl: "/api/cad3d/approve",
+        editUrl: "/api/cad3d/edit"
+      };
+    }
+
+    if (!data.ok) {
+      status.textContent =
+        "CAD3D edit ran, but AutoCAD reported issues.";
+
+      createResultMessage(
+        data,
+        cad3dEditResultHtml(data),
+        { error: true }
+      );
+    } else {
+      const documentName =
+        data.execution_result?.document_name ||
+        "the active drawing";
+
+      status.textContent =
+        `Done — rebuilt ${documentName}.`;
+
+      createResultMessage(
+        data,
+        cad3dEditResultHtml(data)
+      );
+    }
+
+    saveRecent({
+      prompt,
+      summary: data.edit_plan?.summary,
+      verdict: data.ok
+        ? "cad3d edited"
+        : "cad3d edit issues",
+      time: new Date().toLocaleString()
+    });
+  } catch (error) {
+    createMessage(
+      "assistant",
+      String(error.message || error),
+      { error: true }
+    );
+  }
+}
     async function applyLiveEdit(prompt) {
-      const status = createMessage("system", "Inspecting active AutoCAD drawing...");
+  const status = createMessage(
+    "system",
+    "Inspecting active AutoCAD drawing..."
+  );
 
-      try {
-        status.textContent = "Working on the active AutoCAD drawing...\nInspecting current entities...\nPlanning and applying the edit...";
+  try {
+    status.textContent =
+      "Working on the active AutoCAD drawing...\n" +
+      "Inspecting current entities...\n" +
+      "Planning and applying the edit...";
 
-        const response = await fetch("/api/autocad/edit", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt,
-            max_entities: 200,
-            auto_execute: true,
-            save: false,
-            target_dwg_path: null
-          })
-        });
-        const data = await readJson(response);
+    const response = await fetch("/api/autocad/edit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt,
+        max_entities: 200,
+        auto_execute: true,
+        save: false,
+        target_dwg_path: null,
+        use_active_document: true
+      })
+    });
 
-        if (!response.ok) {
-          status.textContent = "Live edit failed.";
-          throw new Error(editApiErrorMessage(response, data));
-        }
+    const data = await readJson(response);
 
-        if (!data.ok) {
-          status.textContent = "Edit plan ran, but AutoCAD reported issues.";
-          createMessage("assistant", editResultHtml(data), { html: true, error: true });
-        } else {
-          const documentName = data.execution_result?.document_name || data.document_name || "the active drawing";
-          status.textContent = `Done — updated ${documentName}.`;
-          createMessage("assistant", editResultHtml(data), { html: true });
-        }
+    if (!response.ok) {
+      status.textContent = "Live edit failed.";
 
-        saveRecent({
-          prompt,
-          summary: data.edit_plan?.summary,
-          verdict: data.ok ? "edited" : "edit issues",
-          time: new Date().toLocaleString()
-        });
-      } catch (error) {
-        createMessage("assistant", String(error.message || error), { error: true });
-      }
+      throw new Error(
+        editApiErrorMessage(response, data)
+      );
     }
+
+    if (!data.ok) {
+      status.textContent =
+        "Edit plan ran, but AutoCAD reported issues.";
+
+      createResultMessage(
+        data,
+        editResultHtml(data),
+        { error: true }
+      );
+    } else {
+      const documentName =
+        data.execution_result?.document_name ||
+        data.document_name ||
+        "the active drawing";
+
+      status.textContent =
+        `Done — updated ${documentName}.`;
+
+      createResultMessage(
+        data,
+        editResultHtml(data)
+      );
+    }
+
+    saveRecent({
+      prompt,
+      summary: data.edit_plan?.summary,
+      verdict: data.ok
+        ? "edited"
+        : "edit issues",
+      time: new Date().toLocaleString()
+    });
+  } catch (error) {
+    createMessage(
+      "assistant",
+      String(error.message || error),
+      { error: true }
+    );
+  }
+}
 
     async function sendPrompt() {
       const prompt = promptInput.value.trim();

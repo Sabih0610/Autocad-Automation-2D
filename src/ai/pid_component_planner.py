@@ -18,8 +18,10 @@ from src.framework.pid.component_schema import (
     PID_COMPONENT_SCENE_SCHEMA,
     validate_pid_component_scene_data,
 )
-from src.framework.pid.component_templates import choose_pid_component_template
-
+from src.framework.pid.component_templates import (
+    choose_pid_component_template,
+    ensure_addressable_component_tags,
+)
 
 _SUPPORTED_COMPONENT_TYPES = [
     "horizontal_vessel",
@@ -36,14 +38,13 @@ _SUPPORTED_COMPONENT_TYPES = [
 ]
 
 
-PID_COMPONENT_PLANNER_MAX_TOKENS = 5000
-
-
 _EXAMPLE_COMPONENT_SCENE: dict[str, Any] = {
     "schema_version": PID_COMPONENT_SCHEMA_VERSION,
     "title": "Simple Vessel P&ID",
     "drawing_type": "P&ID",
-    "assumptions": ["Used clean schematic layout."],
+    "assumptions": [
+        "Used clean schematic layout."
+    ],
     "components": [
         {
             "component_type": "horizontal_vessel",
@@ -56,26 +57,48 @@ _EXAMPLE_COMPONENT_SCENE: dict[str, Any] = {
         {
             "component_type": "pipe_run",
             "id": "P_IN",
-            "points": [[-2600, 0], [-1600, 0]],
+            "tag": "P-101",
+            "points": [
+                [-2600, 0],
+                [-1600, 0],
+            ],
             "label": "3 Phase Inlet",
             "flow_direction": "RIGHT",
-            "flow_arrow_position": [-2400, 0],
+            "flow_arrow_position": [
+                -2400,
+                0,
+            ],
         },
         {
             "component_type": "gate_valve",
             "id": "XV_IN",
-            "center": [-2100, 0],
+            "tag": "XV-101",
+            "center": [
+                -2100,
+                0,
+            ],
             "orientation": "H",
         },
         {
             "component_type": "instrument_bubble",
             "id": "PI201",
             "tag": "PI-201",
-            "center": [0, 700],
+            "center": [
+                0,
+                700,
+            ],
         },
     ],
 }
 
+
+PID_COMPONENT_PLANNER_MAX_TOKENS = 5000
+
+
+from src.framework.pid.component_templates import (
+    choose_pid_component_template,
+    ensure_addressable_component_tags,
+)
 
 PID_COMPONENT_PLANNER_SYSTEM_PROMPT = f"""
 You are a P&ID component scene planner, not an AutoCAD command generator.
@@ -105,6 +128,7 @@ Rules:
 - Keep major equipment centered.
 - Put labels away from lines and equipment.
 - Use pipe_run components for pipes.
+- Give every pipe_run, gate_valve, and control_valve a unique engineering tag such as P-101, XV-101, or FV-101.
 - Use valve components instead of drawing valve geometry.
 - Use instrument_bubble components for instrument tags.
 - Use controller_loop or signal_line components for control relationships.
@@ -167,33 +191,85 @@ def _build_planner_prompt(user_request: str, drawing_style: str) -> str:
 
 def plan_pid_component_scene(
     user_request: str,
-    drawing_style: str = "clean schematic P&ID",
+    drawing_style: str = (
+        "clean schematic P&ID"
+    ),
 ) -> dict:
     """Plan a validated P&ID component scene from a natural-language request."""
-    clean_request = user_request.strip()
-    if not clean_request:
-        raise ValueError("user_request cannot be empty")
-
-    clean_style = drawing_style.strip() if drawing_style else "clean schematic P&ID"
-    planner_prompt = _build_planner_prompt(clean_request, clean_style)
-
-    result = ask_ai(
-        prompt=planner_prompt,
-        schema=PID_COMPONENT_SCENE_SCHEMA,
-        system_prompt=PID_COMPONENT_PLANNER_SYSTEM_PROMPT,
-        max_retries=2,
-        max_tokens=PID_COMPONENT_PLANNER_MAX_TOKENS,
+    clean_request = (
+        user_request.strip()
     )
 
-    if not isinstance(result, dict):
-        raise ValueError("P&ID component scene result must be a dict")
+    if not clean_request:
+        raise ValueError(
+            "user_request "
+            "cannot be empty"
+        )
 
-    result.setdefault("schema_version", PID_COMPONENT_SCHEMA_VERSION)
+    clean_style = (
+        drawing_style.strip()
+        if drawing_style
+        else "clean schematic P&ID"
+    )
 
-    validation_errors = validate_pid_component_scene_data(result)
+    planner_prompt = (
+        _build_planner_prompt(
+            clean_request,
+            clean_style,
+        )
+    )
+
+    result = ask_ai(
+        prompt=
+            planner_prompt,
+        schema=
+            PID_COMPONENT_SCENE_SCHEMA,
+        system_prompt=
+            PID_COMPONENT_PLANNER_SYSTEM_PROMPT,
+        max_retries=2,
+        max_tokens=
+            PID_COMPONENT_PLANNER_MAX_TOKENS,
+    )
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+        raise ValueError(
+            "P&ID component scene "
+            "result must be a dict"
+        )
+
+    result.setdefault(
+        "schema_version",
+        PID_COMPONENT_SCHEMA_VERSION,
+    )
+
+    # The model is instructed to supply tags, but identity must never
+    # depend solely on model compliance. Deterministically fill missing
+    # pipe/valve tags before schema validation/rendering.
+    ensure_addressable_component_tags(
+        result
+    )
+
+    validation_errors = (
+        validate_pid_component_scene_data(
+            result
+        )
+    )
+
     if validation_errors:
-        joined_errors = "\n".join(f"- {error}" for error in validation_errors)
-        raise ValueError(f"P&ID component scene failed validation:\n{joined_errors}")
+        joined_errors = "\n".join(
+            f"- {error}"
+            for error
+            in validation_errors
+        )
+
+        raise ValueError(
+            "P&ID component scene "
+            "failed validation:\n"
+            f"{joined_errors}"
+        )
 
     return result
 

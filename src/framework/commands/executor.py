@@ -11,7 +11,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.backup import backup_file
-from src.cad.session import close_document, open_document, serialized
+from src.cad.session import (
+    _same_document_identity,
+    _snapshot_open_documents,
+    close_document,
+    open_document,
+    serialized,
+    summarize_bookkeeping_warnings,
+)
 from src.parametric.vessel.dwg_export import (
     AutoCADNotRunningError,
     _com_retry,
@@ -466,15 +473,18 @@ def _activate_regen_zoom(acad, doc) -> tuple[bool, str | None]:
     return True, None
 
 
-def _safe_close_document(doc: Any, target_dwg_path: str) -> None:
-    """Close a document we opened, without letting that failure mask a result.
-
-    A close failure is housekeeping: the commands have already run and the
-    save has already happened, so raising here would turn a successful edit
-    into a reported failure.
-    """
+def _safe_close_document(
+    doc: Any,
+    target_dwg_path: str,
+    bookkeeping_warnings: list[str] | None = None,
+) -> None:
+    """Close our document without letting housekeeping mask execution."""
     try:
-        close_document(doc, target_dwg_path)
+        close_document(
+            doc,
+            target_dwg_path,
+            bookkeeping_warnings=bookkeeping_warnings,
+        )
     except Exception:
         pass
 
@@ -550,93 +560,187 @@ def execute_commands(
 ) -> dict:
     """Execute structured command dictionaries through AutoCAD COM."""
     if not isinstance(commands, list) or not commands:
-        raise CommandExecutionError("commands must be a non-empty list")
+        raise CommandExecutionError(
+            "commands must be a non-empty list"
+        )
 
     acad = _get_acad()
 
+    bookkeeping_warnings: list[str] = []
+    result: dict | None = None
+
     opened_here = False
-    # `is not None`, not truthiness: an explicitly-sent empty string is a
-    # caller naming a target badly, not declining to name one. Treating it as
-    # absent silently redirected the write to whatever drawing was focused —
-    # unbacked-up — which is precisely the fallback this is meant to prevent.
-    # Forwarded instead, so canonical_path rejects it by name.
+
     if target_dwg_path is not None:
-        # Via session.open_document rather than Documents.Open directly: that
-        # gives the is_file check, the already-open lookup and the FullName
-        # identity check, and tells us whether to close the document again.
-        doc, opened_here = _com_retry(
-            lambda: open_document(acad, str(target_dwg_path)),
+        open_before_retry = (
+            _snapshot_open_documents(acad)
+        )
+
+        doc, _attempt_opened_here = _com_retry(
+            lambda: open_document(
+                acad,
+                str(target_dwg_path),
+                bookkeeping_warnings=bookkeeping_warnings,
+            ),
             f"opening DWG {target_dwg_path}",
+        )
+
+        opened_here = not any(
+            _same_document_identity(
+                doc,
+                existing_doc,
+            )
+            for existing_doc
+            in open_before_retry
         )
     else:
         doc = _active_document(acad)
 
     try:
-        msp = _com_retry(lambda: doc.ModelSpace, "getting model space")
-        layers = _com_retry(lambda: doc.Layers, "getting layers")
+        msp = _com_retry(
+            lambda: doc.ModelSpace,
+            "getting model space",
+        )
+
+        layers = _com_retry(
+            lambda: doc.Layers,
+            "getting layers",
+        )
+
         known_layers: set[str] = set()
-        document_name = _safe_get_document_name(doc)
-        dwg_path = _document_path(doc, target_dwg_path)
-        entity_count_before = _safe_modelspace_count(msp)
+
+        document_name = (
+            _safe_get_document_name(doc)
+        )
+
+        dwg_path = _document_path(
+            doc,
+            target_dwg_path,
+        )
+
+        entity_count_before = (
+            _safe_modelspace_count(msp)
+        )
 
         backup_path = None
         backup_skipped_reason = None
+
         if save:
-            if dwg_path and Path(dwg_path).is_file():
-                backup_path = str(backup_file(Path(dwg_path)))
+            if (
+                dwg_path
+                and Path(dwg_path).is_file()
+            ):
+                backup_path = str(
+                    backup_file(
+                        Path(dwg_path)
+                    )
+                )
+
             elif not dwg_path:
                 backup_skipped_reason = (
-                    "Backup skipped because the active document is unsaved/untitled "
-                    "and has no file path."
+                    "Backup skipped because the active "
+                    "document is unsaved/untitled and "
+                    "has no file path."
                 )
+
             else:
                 backup_skipped_reason = (
-                    f"Backup skipped because the drawing path is not an existing file: {dwg_path}"
+                    "Backup skipped because the drawing "
+                    "path is not an existing file: "
+                    f"{dwg_path}"
                 )
 
         executed_count, errors = _run_commands(
-            commands, doc, msp, layers, known_layers, continue_on_error
+            commands,
+            doc,
+            msp,
+            layers,
+            known_layers,
+            continue_on_error,
         )
 
         if save and not errors:
             try:
-                _com_retry(lambda: doc.Save(), "saving document")
+                _com_retry(
+                    lambda: doc.Save(),
+                    "saving document",
+                )
             except Exception as exc:
                 errors.append(
                     {
                         "command_index": None,
                         "command": "SAVE",
-                        "error": f"{type(exc).__name__}: {exc}",
+                        "error": (
+                            f"{type(exc).__name__}: "
+                            f"{exc}"
+                        ),
                     }
                 )
 
-        entity_count_after = _safe_modelspace_count(msp)
+        entity_count_after = (
+            _safe_modelspace_count(msp)
+        )
+
         zoom_extents_called = False
         zoom_error = None
 
         if zoom_extents:
-            zoom_extents_called, zoom_error = _activate_regen_zoom(acad, doc)
+            (
+                zoom_extents_called,
+                zoom_error,
+            ) = _activate_regen_zoom(
+                acad,
+                doc,
+            )
 
-        return {
+        result = {
             "ok": not errors,
-            "executed_count": executed_count,
-            "total_count": len(commands),
-            "errors": errors,
-            "dwg_path": dwg_path,
-            "document_name": document_name,
-            "entity_count_before": entity_count_before,
-            "entity_count_after": entity_count_after,
-            "zoom_extents_called": zoom_extents_called,
-            "zoom_error": zoom_error,
-            "backup_path": backup_path,
-            "backup_skipped_reason": backup_skipped_reason,
+            "executed_count":
+                executed_count,
+            "total_count":
+                len(commands),
+            "errors":
+                errors,
+            "dwg_path":
+                dwg_path,
+            "document_name":
+                document_name,
+            "entity_count_before":
+                entity_count_before,
+            "entity_count_after":
+                entity_count_after,
+            "zoom_extents_called":
+                zoom_extents_called,
+            "zoom_error":
+                zoom_error,
+            "backup_path":
+                backup_path,
+            "backup_skipped_reason":
+                backup_skipped_reason,
+            "session_bookkeeping_skipped_reason":
+                None,
         }
-    finally:
-        # Only a document this call opened. One the user already had open is
-        # theirs to keep. Runs after the save, and on the failure path too.
-        if opened_here:
-            _safe_close_document(doc, str(target_dwg_path))
 
+    finally:
+        if opened_here:
+            _safe_close_document(
+                doc,
+                str(target_dwg_path),
+                bookkeeping_warnings,
+            )
+
+    if result is None:
+        raise CommandExecutionError(
+            "Command execution produced no result"
+        )
+
+    result[
+        "session_bookkeeping_skipped_reason"
+    ] = summarize_bookkeeping_warnings(
+        bookkeeping_warnings
+    )
+
+    return result
 
 def execute_command_sequence(
     command_sequence: dict,

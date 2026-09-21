@@ -32,33 +32,208 @@ OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_AUDIT_BYTES = 100 * 1024
 AUDIT_ROUTE_MAP = {
-    "/api/projects": "project_register",
-    "/api/projects/{project_id}/scan": "project_scan",
-    "/api/projects/{project_id}/drawings": "project_drawings",
-    "/api/projects/{project_id}/entities": "project_entities",
-    "/api/projects/{project_id}/nearby": "project_nearby",
-    "/api/projects/{project_id}/change-sets": "project_change_sets",
-    "/api/projects/{project_id}/plan": "project_plan",
-    "/api/projects/jobs/{job_id}": "project_job",
-    "/api/projects/jobs/{job_id}/execute": "project_execute",
-    "/api/change-sets": "project_apply",
-    "/api/change-sets/{change_id}/keep": "changeset_keep",
-    "/api/change-sets/{change_id}/revert": "changeset_revert",
-    "/api/title-block-update": "title_block_update",
-    "/api/line-list-extract": "line_list_extract",
-    "/api/place-symbol": "place_symbol",
-    "/api/consistency-check": "consistency_check",
-    "/api/generate-vessel/extract": "generate_vessel_extract",
-    "/api/generate-vessel/confirm": "generate_vessel_confirm",
-    "/api/sketch/generate": "sketch_generate",
-    "/api/sketch/approve": "sketch_approve",
-    "/api/autocad/inspect": "autocad_inspect",
-    "/api/autocad/edit": "autocad_edit",
-    "/api/pid/generate": "pid_generate",
-    "/api/pid/approve": "pid_approve",
-    "/api/cad3d/generate": "cad3d_generate",
-    "/api/cad3d/edit": "cad3d_edit",
-    "/api/cad3d/approve": "cad3d_approve",
+    (
+        "GET",
+        "/api/projects",
+    ):
+        "project_list",
+
+    (
+        "POST",
+        "/api/projects",
+    ):
+        "project_register",
+
+    (
+        "POST",
+        "/api/projects/"
+        "{project_id}/scan",
+    ):
+        "project_scan",
+
+    (
+        "GET",
+        "/api/projects/"
+        "{project_id}/drawings",
+    ):
+        "project_drawings",
+
+    (
+        "GET",
+        "/api/projects/"
+        "{project_id}/entities",
+    ):
+        "project_entities",
+
+    (
+        "GET",
+        "/api/projects/"
+        "{project_id}/drawings/"
+        "{drawing_id}/entities",
+    ):
+        "project_drawing_entities",
+
+    (
+        "GET",
+        "/api/projects/"
+        "{project_id}/entities/"
+        "{entity_id}",
+    ):
+        "project_entity_detail",
+
+    (
+        "GET",
+        "/api/projects/"
+        "{project_id}/nearby",
+    ):
+        "project_nearby",
+
+    (
+        "GET",
+        "/api/projects/"
+        "{project_id}/drawings/"
+        "{drawing_id}/metadata",
+    ):
+        "project_drawing_metadata",
+
+    (
+        "GET",
+        "/api/projects/"
+        "{project_id}/change-sets",
+    ):
+        "project_change_sets",
+
+    (
+        "POST",
+        "/api/projects/"
+        "{project_id}/plan",
+    ):
+        "project_plan",
+
+    (
+        "GET",
+        "/api/projects/jobs/"
+        "{job_id}",
+    ):
+        "project_job",
+
+    (
+        "POST",
+        "/api/projects/jobs/"
+        "{job_id}/execute",
+    ):
+        "project_execute",
+
+    (
+        "POST",
+        "/api/change-sets",
+    ):
+        "project_apply",
+
+    (
+        "POST",
+        "/api/change-sets/"
+        "{change_id}/keep",
+    ):
+        "changeset_keep",
+
+    (
+        "POST",
+        "/api/change-sets/"
+        "{change_id}/revert",
+    ):
+        "changeset_revert",
+
+    (
+        "POST",
+        "/api/title-block-update",
+    ):
+        "title_block_update",
+
+    (
+        "POST",
+        "/api/line-list-extract",
+    ):
+        "line_list_extract",
+
+    (
+        "POST",
+        "/api/place-symbol",
+    ):
+        "place_symbol",
+
+    (
+        "POST",
+        "/api/consistency-check",
+    ):
+        "consistency_check",
+
+    (
+        "POST",
+        "/api/generate-vessel/extract",
+    ):
+        "generate_vessel_extract",
+
+    (
+        "POST",
+        "/api/generate-vessel/confirm",
+    ):
+        "generate_vessel_confirm",
+
+    (
+        "POST",
+        "/api/sketch/generate",
+    ):
+        "sketch_generate",
+
+    (
+        "POST",
+        "/api/sketch/approve",
+    ):
+        "sketch_approve",
+
+    # Deliberately audited read.
+    (
+        "GET",
+        "/api/autocad/inspect",
+    ):
+        "autocad_inspect",
+
+    (
+        "POST",
+        "/api/autocad/edit",
+    ):
+        "autocad_edit",
+
+    (
+        "POST",
+        "/api/pid/generate",
+    ):
+        "pid_generate",
+
+    (
+        "POST",
+        "/api/pid/approve",
+    ):
+        "pid_approve",
+
+    (
+        "POST",
+        "/api/cad3d/generate",
+    ):
+        "cad3d_generate",
+
+    (
+        "POST",
+        "/api/cad3d/edit",
+    ):
+        "cad3d_edit",
+
+    (
+        "POST",
+        "/api/cad3d/approve",
+    ):
+        "cad3d_approve",
 }
 CURRENT_AUDIT_JOB_ID: ContextVar[str | None] = ContextVar("current_audit_job_id", default=None)
 
@@ -229,7 +404,18 @@ def _install_audit_wrappers() -> None:
     for route in app.routes:
         if not isinstance(route, APIRoute):
             continue
-        if route.path not in AUDIT_ROUTE_MAP:
+        audited_methods = {
+            method
+            for method
+            in route.methods
+            if (
+                method,
+                route.path,
+            )
+            in AUDIT_ROUTE_MAP
+        }
+
+        if not audited_methods:
             continue
 
         original_endpoint = route.endpoint
@@ -273,15 +459,128 @@ class AuditJobMiddleware:
             await self.app(scope, receive, send)
             return
 
-        path = scope.get("path", "")
-        use_case = AUDIT_ROUTE_MAP.get(path)
+        path = scope.get(
+            "path",
+            "",
+        )
+
+        method = scope.get(
+            "method",
+            "GET",
+        ).upper()
+
+        # Exact static route first.
+        use_case = (
+            AUDIT_ROUTE_MAP
+            .get(
+                (
+                    method,
+                    path,
+                )
+            )
+        )
+
+        # Dynamic FastAPI route.
         if use_case is None:
             for route in app.routes:
-                if isinstance(route, APIRoute) and route.path in AUDIT_ROUTE_MAP and route.path_regex.fullmatch(path):
-                    use_case = AUDIT_ROUTE_MAP[route.path]
+                if (
+                    isinstance(
+                        route,
+                        APIRoute,
+                    )
+                    and method
+                    in route.methods
+                    and (
+                        method,
+                        route.path,
+                    )
+                    in AUDIT_ROUTE_MAP
+                    and (
+                        route
+                        .path_regex
+                        .fullmatch(
+                            path
+                        )
+                    )
+                ):
+                    use_case = (
+                        AUDIT_ROUTE_MAP[
+                            (
+                                method,
+                                route.path,
+                            )
+                        ]
+                    )
+
                     break
+
+        # Preserve existing behavior:
+        # a 404/405 against a known audited route
+        # is still itself audited.
+        #
+        # This fallback only applies when the path
+        # has exactly one possible audited use-case.
+        #
+        # /api/projects does NOT hit this fallback
+        # because GET and POST resolve above.
         if use_case is None:
-            await self.app(scope, receive, send)
+            path_candidates = (
+                set()
+            )
+
+            for route in app.routes:
+                if not isinstance(
+                    route,
+                    APIRoute,
+                ):
+                    continue
+
+                if not (
+                    route
+                    .path_regex
+                    .fullmatch(
+                        path
+                    )
+                ):
+                    continue
+
+                for route_method in (
+                    route.methods
+                ):
+                    mapped = (
+                        AUDIT_ROUTE_MAP
+                        .get(
+                            (
+                                route_method,
+                                route.path,
+                            )
+                        )
+                    )
+
+                    if mapped is not None:
+                        path_candidates.add(
+                            mapped
+                        )
+
+            if (
+                len(
+                    path_candidates
+                )
+                == 1
+            ):
+                use_case = next(
+                    iter(
+                        path_candidates
+                    )
+                )
+
+        if use_case is None:
+            await self.app(
+                scope,
+                receive,
+                send,
+            )
+
             return
 
         request_body = b""

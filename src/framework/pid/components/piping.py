@@ -73,22 +73,58 @@ class PipeRunComponent(BasePIDComponent):
         }
 
     def render(self) -> list[dict]:
-        commands = pipe_line_commands(self.points, tag=self.tag)
+        # Normal production scenes should already carry an engineering tag.
+        # The component id is retained as a defensive identity fallback so
+        # an older or directly-created component cannot become anonymous.
+        commands = pipe_line_commands(
+            self.points,
+            tag=self.tag or self.id,
+        )
 
         if self.label:
-            label_position = self.label_position
+            label_position = (
+                self.label_position
+            )
+
             if label_position is None:
-                midpoint = polyline_midpoint(self.points)
-                label_position = [midpoint[0] - PID_PIPE_LABEL_OFFSET * 0.8, midpoint[1] + PID_PIPE_LABEL_OFFSET]
-            commands += text_label_commands(
-                self.label,
-                label_position,
-                height=PID_TEXT_HEIGHT_NORMAL,
+                midpoint = (
+                    polyline_midpoint(
+                        self.points
+                    )
+                )
+
+                label_position = [
+                    midpoint[0]
+                    - PID_PIPE_LABEL_OFFSET
+                    * 0.8,
+                    midpoint[1]
+                    + PID_PIPE_LABEL_OFFSET,
+                ]
+
+            commands += (
+                text_label_commands(
+                    self.label,
+                    label_position,
+                    height=
+                        PID_TEXT_HEIGHT_NORMAL,
+                )
             )
 
         if self.flow_direction:
-            arrow_position = self.flow_arrow_position or polyline_midpoint(self.points)
-            commands += flow_arrow_commands(arrow_position, direction=self.flow_direction)
+            arrow_position = (
+                self.flow_arrow_position
+                or polyline_midpoint(
+                    self.points
+                )
+            )
+
+            commands += (
+                flow_arrow_commands(
+                    arrow_position,
+                    direction=
+                        self.flow_direction,
+                )
+            )
 
         return commands
 

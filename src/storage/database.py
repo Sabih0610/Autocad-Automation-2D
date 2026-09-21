@@ -5,6 +5,10 @@ from pathlib import Path
 from src.logging import db
 from .spatial import ensure_spatial
 from .changeset_schema import ensure_changeset_file_targets
+from .drawing_metadata_schema import ensure_drawing_metadata_tables
+from .index_surface_schema import (
+    ensure_index_surface,
+)
 from .relationship_schema import ensure_relationship_targets
 
 SCHEMA = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8-sig")
@@ -43,9 +47,25 @@ def connection():
         # Each already guards its own work behind a single cheap query, so
         # unlike SCHEMA there's no expensive replay to skip, and skipping
         # the call entirely would stop them from ever self-healing.
-        ensure_relationship_targets(conn)
-        ensure_changeset_file_targets(conn)
-        ensure_spatial(conn)
+        ensure_relationship_targets(
+            conn
+        )
+
+        ensure_changeset_file_targets(
+            conn
+        )
+
+        ensure_drawing_metadata_tables(
+            conn
+        )
+
+        ensure_index_surface(
+            conn
+        )
+
+        ensure_spatial(
+            conn
+        )
         # Cleanup for objects an older version of this code could have left
         # behind on disk: a case-sensitive tag index made redundant by
         # schema.sql's idx_entity_tag_nocase (entities.tag is only ever

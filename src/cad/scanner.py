@@ -24,9 +24,66 @@ def stamp(path):
     return stat.st_size, str(stat.st_mtime_ns)
 
 
+def _env_distance(
+    name,
+    default,
+):
+    raw = os.getenv(
+        name,
+        str(
+            default
+        ),
+    ).strip()
+
+    try:
+        value = float(
+            raw
+        )
+
+    except ValueError as exc:
+        raise ValueError(
+            f"{name} must be a number"
+        ) from exc
+
+    if value < 0:
+        raise ValueError(
+            f"{name} must be non-negative"
+        )
+
+    return value
+
+
 def configured_extractor():
-    executable = os.getenv("ODA_FILE_CONVERTER")
-    return DXFExtractor(ODAConverter(executable) if executable else None)
+    executable = os.getenv(
+        "ODA_FILE_CONVERTER",
+        "",
+    ).strip()
+
+    return DXFExtractor(
+        (
+            ODAConverter(
+                executable
+            )
+            if executable
+            else None
+        ),
+        proximity_tag_distance_mm=
+            _env_distance(
+                (
+                    "AUTOCAD_AI_"
+                    "TAG_PROXIMITY_MM"
+                ),
+                250.0,
+            ),
+        proximity_tag_ambiguity_mm=
+            _env_distance(
+                (
+                    "AUTOCAD_AI_"
+                    "TAG_AMBIGUITY_MM"
+                ),
+                25.0,
+            ),
+    )
 
 
 def _extract_file(factory, path, expected_stamp):

@@ -18,6 +18,7 @@ class EntityRecord:
     entity_type: str
     layer: str
     tag: str | None = None
+    tag_source: str = "none"
 
 
 @dataclass

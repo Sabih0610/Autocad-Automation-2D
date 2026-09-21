@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.backup import backup_file
-from src.cad.session import close_document, open_document
+from src.cad.session import (
+    _same_document_identity,
+    _snapshot_open_documents,
+    close_document,
+    open_document,
+    summarize_bookkeeping_warnings,
+)
 from src.framework.cad3d.scene_schema import validate_cad3d_scene
 from src.framework.cad3d.routing import (
     CAD3DRoutingError,
@@ -622,146 +628,310 @@ def execute_cad3d_scene(
     zoom_extents: bool = True,
 ) -> dict:
     """Execute a validated CAD3D scene into AutoCAD through COM."""
-    validation_errors = validate_cad3d_scene(scene)
-    if validation_errors:
-        joined_errors = "\n".join(f"- {error}" for error in validation_errors)
-        raise AutoCAD3DExecutionError(f"Invalid CAD3D scene:\n{joined_errors}")
+    validation_errors = validate_cad3d_scene(
+        scene
+    )
 
-    original_component_count = len(scene["components"])
-    pipe_connections_expanded = count_pipe_connections(scene)
+    if validation_errors:
+        joined_errors = "\n".join(
+            f"- {error}"
+            for error in validation_errors
+        )
+
+        raise AutoCAD3DExecutionError(
+            f"Invalid CAD3D scene:\n"
+            f"{joined_errors}"
+        )
+
+    original_component_count = len(
+        scene["components"]
+    )
+
+    pipe_connections_expanded = (
+        count_pipe_connections(scene)
+    )
 
     try:
-        expanded_scene = expand_pipe_connections(scene)
+        expanded_scene = expand_pipe_connections(
+            scene
+        )
     except CAD3DRoutingError as exc:
-        raise AutoCAD3DExecutionError(f"CAD3D pipe routing failed: {exc}") from exc
+        raise AutoCAD3DExecutionError(
+            "CAD3D pipe routing failed: "
+            f"{exc}"
+        ) from exc
 
-    expanded_validation_errors = validate_cad3d_scene(expanded_scene)
+    expanded_validation_errors = (
+        validate_cad3d_scene(
+            expanded_scene
+        )
+    )
+
     if expanded_validation_errors:
-        joined_errors = "\n".join(f"- {error}" for error in expanded_validation_errors)
-        raise AutoCAD3DExecutionError(f"Invalid expanded CAD3D scene:\n{joined_errors}")
+        joined_errors = "\n".join(
+            f"- {error}"
+            for error
+            in expanded_validation_errors
+        )
+
+        raise AutoCAD3DExecutionError(
+            "Invalid expanded CAD3D scene:\n"
+            f"{joined_errors}"
+        )
 
     acad = _get_acad()
+    bookkeeping_warnings: list[str] = []
+    result: dict | None = None
 
     opened_here = False
-    # `is not None`, not truthiness: an explicitly-sent empty string is a
-    # caller naming a target badly, not declining to name one. Treating it as
-    # absent silently redirected the write to whatever drawing was focused —
-    # unbacked-up — which is precisely the fallback this is meant to prevent.
-    # Forwarded instead, so canonical_path rejects it by name.
+
+    # `is not None`, not truthiness: an explicitly-sent empty string
+    # remains an explicit invalid target rather than silently falling
+    # back to whatever drawing is currently focused.
     if target_dwg_path is not None:
-        # Via session.open_document rather than Documents.Open directly, for
-        # the is_file check, the already-open lookup and the FullName identity
-        # check — and so we know whether to close the document again.
-        doc, opened_here = _com_retry(
-            lambda: open_document(acad, str(target_dwg_path)),
+        # Capture ownership BEFORE the complete retry sequence.
+        #
+        # A failed first open attempt may already have caused AutoCAD
+        # to open the target drawing. If a later retry then sees that
+        # drawing already open, its local opened_here flag is False.
+        #
+        # We therefore determine ownership relative to the state that
+        # existed before any retry attempt occurred.
+        open_before_retry = (
+            _snapshot_open_documents(acad)
+        )
+
+        doc, _attempt_opened_here = _com_retry(
+            lambda: open_document(
+                acad,
+                str(target_dwg_path),
+                bookkeeping_warnings=bookkeeping_warnings,
+            ),
             f"opening DWG {target_dwg_path}",
+        )
+
+        opened_here = not any(
+            _same_document_identity(
+                doc,
+                existing_doc,
+            )
+            for existing_doc
+            in open_before_retry
         )
     else:
         doc = _active_document(acad)
 
     try:
-        document_name = _safe_get_document_name(doc)
-        dwg_path = _document_path(doc, target_dwg_path)
+        document_name = (
+            _safe_get_document_name(doc)
+        )
+
+        dwg_path = _document_path(
+            doc,
+            target_dwg_path,
+        )
+
         backup_path = None
         backup_skipped_reason = None
+
         if save:
-            if dwg_path and Path(dwg_path).is_file():
-                backup_path = str(backup_file(Path(dwg_path)))
+            if (
+                dwg_path
+                and Path(dwg_path).is_file()
+            ):
+                backup_path = str(
+                    backup_file(
+                        Path(dwg_path)
+                    )
+                )
+
             elif not dwg_path:
                 backup_skipped_reason = (
-                    "Backup skipped because the active document is unsaved/untitled "
-                    "and has no file path."
+                    "Backup skipped because the active document "
+                    "is unsaved/untitled and has no file path."
                 )
+
             else:
                 backup_skipped_reason = (
-                    f"Backup skipped because the drawing path is not an existing file: {dwg_path}"
+                    "Backup skipped because the drawing path "
+                    "is not an existing file: "
+                    f"{dwg_path}"
                 )
 
-        # An untitled document has no prior on-disk drawing to protect. It is safe
-        # to permit Save after successful execution even though no backup can exist.
-        # Presentation layers are best-effort. They should never block geometry.
+        # An untitled document has no prior on-disk drawing to
+        # protect. It is safe to permit Save after successful
+        # execution even though no backup can exist.
+        #
+        # Presentation layers are best-effort. They must never
+        # block geometry.
         presentation_layers_created = False
         presentation_layer_error = None
-        try:
-            _ensure_cad3d_presentation_layers(doc)
-            presentation_layers_created = True
-        except Exception as exc:
-            presentation_layer_error = f"{type(exc).__name__}: {exc}"
 
-        msp = _com_retry(lambda: doc.ModelSpace, "getting model space")
-        entity_count_before = _safe_modelspace_count(msp)
+        try:
+            _ensure_cad3d_presentation_layers(
+                doc
+            )
+
+            presentation_layers_created = True
+
+        except Exception as exc:
+            presentation_layer_error = (
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
+        msp = _com_retry(
+            lambda: doc.ModelSpace,
+            "getting model space",
+        )
+
+        entity_count_before = (
+            _safe_modelspace_count(msp)
+        )
 
         executed_count = 0
         errors: list[dict[str, Any]] = []
-        components = expanded_scene["components"]
 
-        for index, component in enumerate(components):
+        components = expanded_scene[
+            "components"
+        ]
+
+        for index, component in enumerate(
+            components
+        ):
             try:
-                created_entities = _execute_component_3d(doc, component)
+                created_entities = (
+                    _execute_component_3d(
+                        doc,
+                        component,
+                    )
+                )
+
                 if created_entities <= 0:
                     raise AutoCAD3DExecutionError(
-                        f"No entities were created for component {component.get('id')}"
+                        "No entities were created "
+                        "for component "
+                        f"{component.get('id')}"
                     )
+
                 executed_count += 1
+
             except Exception as exc:
                 errors.append(
                     {
                         "component_index": index,
-                        "component_id": component.get("id"),
-                        "component_type": component.get("component_type"),
-                        "error": f"{type(exc).__name__}: {exc}",
+                        "component_id":
+                            component.get("id"),
+                        "component_type":
+                            component.get(
+                                "component_type"
+                            ),
+                        "error": (
+                            f"{type(exc).__name__}: "
+                            f"{exc}"
+                        ),
                     }
                 )
 
         if save and not errors:
             try:
-                _com_retry(lambda: doc.Save(), "saving document")
+                _com_retry(
+                    lambda: doc.Save(),
+                    "saving document",
+                )
+
             except Exception as exc:
                 errors.append(
                     {
                         "component_index": None,
                         "component_id": None,
                         "component_type": "SAVE",
-                        "error": f"{type(exc).__name__}: {exc}",
+                        "error": (
+                            f"{type(exc).__name__}: "
+                            f"{exc}"
+                        ),
                     }
                 )
 
-        entity_count_after = _safe_modelspace_count(msp)
+        entity_count_after = (
+            _safe_modelspace_count(msp)
+        )
+
         zoom_extents_called = False
         zoom_error = None
 
         if zoom_extents:
-            zoom_extents_called, zoom_error = _activate_regen_zoom(acad, doc)
+            (
+                zoom_extents_called,
+                zoom_error,
+            ) = _activate_regen_zoom(
+                acad,
+                doc,
+            )
 
-        return {
+        result = {
             "ok": not errors,
             "executed_count": executed_count,
             "total_count": len(components),
-            "pipe_connections_expanded": pipe_connections_expanded,
-            "executable_component_count": len(components),
-            "original_component_count": original_component_count,
+            "pipe_connections_expanded":
+                pipe_connections_expanded,
+            "executable_component_count":
+                len(components),
+            "original_component_count":
+                original_component_count,
             "errors": errors,
             "dwg_path": dwg_path,
             "document_name": document_name,
-            "entity_count_before": entity_count_before,
-            "entity_count_after": entity_count_after,
-            "zoom_extents_called": zoom_extents_called,
+            "entity_count_before":
+                entity_count_before,
+            "entity_count_after":
+                entity_count_after,
+            "zoom_extents_called":
+                zoom_extents_called,
             "zoom_error": zoom_error,
-            "presentation_layers_created": presentation_layers_created,
-            "presentation_layer_error": presentation_layer_error,
+            "presentation_layers_created":
+                presentation_layers_created,
+            "presentation_layer_error":
+                presentation_layer_error,
             "backup_path": backup_path,
-            "backup_skipped_reason": backup_skipped_reason,
+            "backup_skipped_reason":
+                backup_skipped_reason,
+            "session_bookkeeping_skipped_reason":
+                None,
         }
+
     finally:
-        # Only a document this call opened; one the user already had
-        # open is theirs to keep.
         if opened_here:
-            _safe_close_document(doc, str(target_dwg_path))
+            _safe_close_document(
+                doc,
+                str(target_dwg_path),
+                bookkeeping_warnings,
+            )
+
+    if result is None:
+        raise AutoCAD3DExecutionError(
+            "CAD3D execution produced no result"
+        )
+
+    result[
+        "session_bookkeeping_skipped_reason"
+    ] = summarize_bookkeeping_warnings(
+        bookkeeping_warnings
+    )
+
+    return result
 
 
-def _safe_close_document(doc: Any, target_dwg_path: str) -> None:
-    """Close a document we opened without masking the result we already have."""
+def _safe_close_document(
+    doc: Any,
+    target_dwg_path: str,
+    bookkeeping_warnings: list[str] | None = None,
+) -> None:
     try:
-        close_document(doc, target_dwg_path)
+        close_document(
+            doc,
+            target_dwg_path,
+            bookkeeping_warnings=bookkeeping_warnings,
+        )
     except Exception:
         pass

@@ -213,3 +213,40 @@ def test_extract_scene_component_summary_returns_counts_ids_and_types() -> None:
         "pipe_run_3d": 1,
         "vertical_tank_3d": 1,
     }
+
+
+def test_get_old_record_after_restart_does_not_hijack_latest(
+    tmp_path,
+) -> None:
+    store = CAD3DSceneStore(
+        persist_dir=tmp_path
+    )
+
+    store.put_generated_scene(
+        "A",
+        "first",
+        _scene(),
+    )
+
+    store.put_generated_scene(
+        "B",
+        "second",
+        _scene(),
+    )
+
+    restarted = CAD3DSceneStore(
+        persist_dir=tmp_path
+    )
+
+    assert restarted.get("A").token == "A"
+
+    latest = restarted.get_latest()
+    listed_latest = (
+        restarted.list_records()[0]
+    )
+
+    assert latest.token == "B"
+    assert (
+        latest.token
+        == listed_latest.token
+    )

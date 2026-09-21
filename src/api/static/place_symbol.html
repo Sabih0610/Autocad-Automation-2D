@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Place Symbol</title>
+
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -12,27 +13,55 @@
       max-width: 860px;
       padding: 0 16px;
     }
+
     label {
       display: block;
       font-weight: bold;
       margin-top: 12px;
     }
-    textarea, button {
+
+    textarea,
+    button {
       box-sizing: border-box;
       font: inherit;
       margin-top: 4px;
       padding: 8px;
       width: 100%;
     }
+
     textarea {
       min-height: 140px;
     }
+
     .actions {
       display: grid;
       gap: 12px;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       margin-top: 16px;
     }
+
+    .change-set-panel {
+      border: 1px solid #cccccc;
+      border-radius: 6px;
+      margin-top: 16px;
+      padding: 12px;
+    }
+
+    .change-set-panel.info {
+      background: #f5f5f5;
+    }
+
+    .change-set-actions {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-top: 12px;
+    }
+
+    .change-set-status {
+      margin-top: 8px;
+    }
+
     pre {
       background: #f5f5f5;
       overflow-x: auto;
@@ -41,49 +70,328 @@
     }
   </style>
 </head>
+
 <body>
   <h1>Place Symbol</h1>
+
   <form id="place-symbol-form">
     <label for="prompt">Prompt</label>
-    <textarea id="prompt" name="prompt">Add pump P-101 at coordinates 500, 250 on layer P-EQUIPMENT for cooling water.</textarea>
+
+    <textarea
+      id="prompt"
+      name="prompt"
+    >Add pump P-101 at coordinates 500, 250 on layer P-EQUIPMENT for cooling water.</textarea>
 
     <div class="actions">
-      <button type="button" id="submit-dry-run">Submit (dry-run)</button>
-      <button type="button" id="submit-execute">Submit (execute)</button>
+      <button type="button" id="submit-dry-run">
+        Submit (dry-run)
+      </button>
+
+      <button type="button" id="submit-execute">
+        Submit (execute)
+      </button>
     </div>
   </form>
 
   <h2>Response</h2>
+
   <pre id="result">No request submitted yet.</pre>
 
-  <p><a href="/">Back to home</a></p>
+  <div id="change-set-result"></div>
+
+  <p>
+    <a href="/">Back to home</a>
+  </p>
 
   <script>
     const result = document.getElementById("result");
 
-    async function submitRequest(execute) {
-      const payload = {
-        prompt: document.getElementById("prompt").value,
-        execute: execute
-      };
+    const changeSetResult =
+      document.getElementById("change-set-result");
 
-      result.textContent = "Submitting...";
+    function escapeText(value) {
+      const div = document.createElement("div");
+      div.textContent =
+        value == null ? "" : String(value);
+      return div.innerHTML;
+    }
 
+    async function readJson(response) {
       try {
-        const response = await fetch("/api/place-symbol", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        const data = await response.json();
-        result.textContent = JSON.stringify(data, null, 2);
+        return await response.json();
       } catch (error) {
-        result.textContent = JSON.stringify({ ok: false, error: String(error) }, null, 2);
+        return {};
       }
     }
 
-    document.getElementById("submit-dry-run").addEventListener("click", () => submitRequest(false));
-    document.getElementById("submit-execute").addEventListener("click", () => submitRequest(true));
+    function errorMessage(data, fallback) {
+      if (typeof data.detail === "string") {
+        return data.detail;
+      }
+
+      if (data.message) {
+        return data.message;
+      }
+
+      return fallback;
+    }
+
+    function changeSetControlsHtml(data) {
+      const changeSetId = data?.change_set_id;
+      const skippedReason =
+        data?.change_set_skipped_reason;
+
+      if (changeSetId) {
+        return `
+          <div class="change-set-panel">
+            <div>
+              <strong>Change set:</strong>
+              ${escapeText(changeSetId)}
+            </div>
+
+            <div class="change-set-status">
+              This write can be kept or reverted.
+            </div>
+
+            <div class="change-set-actions">
+              <button
+                class="change-set-button revert"
+                type="button"
+              >
+                Revert
+              </button>
+
+              <button
+                class="change-set-button keep"
+                type="button"
+              >
+                Keep
+              </button>
+            </div>
+          </div>
+        `;
+      }
+
+      if (skippedReason) {
+        return `
+          <div class="change-set-panel info">
+            <div>
+              <strong>Change history:</strong>
+              ${escapeText(skippedReason)}
+            </div>
+          </div>
+        `;
+      }
+
+      return "";
+    }
+
+    async function performChangeSetAction(
+      changeSetId,
+      action,
+      panel
+    ) {
+      const revertButton =
+        panel.querySelector(
+          ".change-set-button.revert"
+        );
+
+      const keepButton =
+        panel.querySelector(
+          ".change-set-button.keep"
+        );
+
+      const status =
+        panel.querySelector(
+          ".change-set-status"
+        );
+
+      const buttons =
+        [revertButton, keepButton].filter(Boolean);
+
+      buttons.forEach((button) => {
+        button.disabled = true;
+      });
+
+      if (status) {
+        status.textContent =
+          action === "revert"
+            ? "Reverting change set..."
+            : "Keeping change set...";
+      }
+
+      try {
+        const response = await fetch(
+          `/api/change-sets/${encodeURIComponent(changeSetId)}/${action}`,
+          {
+            method: "POST"
+          }
+        );
+
+        const data = await readJson(response);
+
+        if (!response.ok) {
+          throw new Error(
+            errorMessage(
+              data,
+              `Could not ${action} this change set.`
+            )
+          );
+        }
+
+        if (status) {
+          status.textContent =
+            action === "revert"
+              ? "Reverted. The backed-up drawing has been restored."
+              : "Kept. This change set is now final.";
+        }
+
+        const actions =
+          panel.querySelector(
+            ".change-set-actions"
+          );
+
+        if (actions) {
+          actions.remove();
+        }
+      } catch (error) {
+        if (status) {
+          status.textContent =
+            String(error.message || error);
+        }
+
+        buttons.forEach((button) => {
+          button.disabled = false;
+        });
+      }
+    }
+
+    function renderChangeSetControls(data) {
+      changeSetResult.innerHTML =
+        changeSetControlsHtml(data);
+
+      const changeSetId =
+        data?.change_set_id;
+
+      if (!changeSetId) {
+        return;
+      }
+
+      const panel =
+        changeSetResult.querySelector(
+          ".change-set-panel"
+        );
+
+      if (!panel) {
+        return;
+      }
+
+      const revertButton =
+        panel.querySelector(
+          ".change-set-button.revert"
+        );
+
+      const keepButton =
+        panel.querySelector(
+          ".change-set-button.keep"
+        );
+
+      if (revertButton) {
+        revertButton.addEventListener(
+          "click",
+          () => {
+            performChangeSetAction(
+              changeSetId,
+              "revert",
+              panel
+            );
+          }
+        );
+      }
+
+      if (keepButton) {
+        keepButton.addEventListener(
+          "click",
+          () => {
+            performChangeSetAction(
+              changeSetId,
+              "keep",
+              panel
+            );
+          }
+        );
+      }
+    }
+
+    async function submitRequest(execute) {
+      const payload = {
+        prompt:
+          document.getElementById("prompt").value,
+
+        execute: execute,
+
+        // Explicit opt-in required by the backend
+        // whenever this page writes to AutoCAD's
+        // currently active drawing.
+        use_active_document: execute
+      };
+
+      result.textContent = "Submitting...";
+      changeSetResult.innerHTML = "";
+
+      try {
+        const response =
+          await fetch(
+            "/api/place-symbol",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type":
+                  "application/json"
+              },
+              body: JSON.stringify(payload)
+            }
+          );
+
+        const data =
+          await readJson(response);
+
+        result.textContent =
+          JSON.stringify(
+            data,
+            null,
+            2
+          );
+
+        renderChangeSetControls(data);
+      } catch (error) {
+        result.textContent =
+          JSON.stringify(
+            {
+              ok: false,
+              error: String(error)
+            },
+            null,
+            2
+          );
+
+        changeSetResult.innerHTML = "";
+      }
+    }
+
+    document
+      .getElementById("submit-dry-run")
+      .addEventListener(
+        "click",
+        () => submitRequest(false)
+      );
+
+    document
+      .getElementById("submit-execute")
+      .addEventListener(
+        "click",
+        () => submitRequest(true)
+      );
   </script>
 </body>
 </html>

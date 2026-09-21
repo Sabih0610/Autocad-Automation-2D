@@ -12,7 +12,14 @@ from pathlib import Path
 from typing import Any
 
 from src.backup import backup_file
-from src.cad.session import close_document, open_document, serialized
+from src.cad.session import (
+    _same_document_identity,
+    _snapshot_open_documents,
+    close_document,
+    open_document,
+    serialized,
+    summarize_bookkeeping_warnings,
+)
 from src.framework.commands.edit_schema import validate_edit_plan
 from src.framework.commands.executor import execute_commands_in_document
 from src.parametric.vessel.dwg_export import (
@@ -38,31 +45,51 @@ def _active_document(acad: Any):
     return doc
 
 
-def _get_document(acad: Any, target_dwg_path: str | None):
-    """Resolve the document to edit, reporting whether this call opened it.
-
-    Routed through session.open_document rather than Documents.Open so it
-    inherits the is_file check, the already-open lookup and the FullName
-    identity check — and so the caller knows whether to close it again.
-    """
-    # `is not None`, not truthiness: an explicitly-sent empty string is a
-    # caller naming a target badly, not declining to name one. Treating it as
-    # absent silently redirected the write to whatever drawing was focused —
-    # unbacked-up — which is precisely the fallback this is meant to prevent.
-    # Forwarded instead, so canonical_path rejects it by name.
+def _get_document(
+    acad: Any,
+    target_dwg_path: str | None,
+    bookkeeping_warnings: list[str] | None = None,
+):
+    """Resolve the edit target while preserving ownership across retries."""
     if target_dwg_path is not None:
-        return _com_retry(
-            lambda: open_document(acad, str(target_dwg_path)),
+        open_before_retry = (
+            _snapshot_open_documents(acad)
+        )
+
+        doc, _attempt_opened_here = _com_retry(
+            lambda: open_document(
+                acad,
+                str(target_dwg_path),
+                bookkeeping_warnings=bookkeeping_warnings,
+            ),
             f"opening DWG {target_dwg_path}",
         )
+
+        opened_here = not any(
+            _same_document_identity(
+                doc,
+                existing_doc,
+            )
+            for existing_doc
+            in open_before_retry
+        )
+
+        return doc, opened_here
 
     return _active_document(acad), False
 
 
-def _safe_close_document(doc: Any, target_dwg_path: str) -> None:
-    """Close a document we opened without masking the result we already have."""
+def _safe_close_document(
+    doc: Any,
+    target_dwg_path: str,
+    bookkeeping_warnings: list[str] | None = None,
+) -> None:
     try:
-        close_document(doc, target_dwg_path)
+        close_document(
+            doc,
+            target_dwg_path,
+            bookkeeping_warnings=bookkeeping_warnings,
+        )
     except Exception:
         pass
 
@@ -152,7 +179,6 @@ def _normalize_add_errors(add_result: dict) -> list[dict]:
 
     return normalized_errors
 
-
 @serialized
 def execute_edit_plan(
     edit_plan: dict,
@@ -161,52 +187,113 @@ def execute_edit_plan(
     continue_on_error: bool = True,
     zoom_extents: bool = True,
 ) -> dict:
-    """Apply a validated live edit plan to the active AutoCAD drawing."""
-    validation_errors = validate_edit_plan(edit_plan)
+    """Apply a validated live edit plan to AutoCAD."""
+    validation_errors = validate_edit_plan(
+        edit_plan
+    )
+
     if validation_errors:
-        joined_errors = "\n".join(f"- {error}" for error in validation_errors)
-        raise EditExecutionError(f"Invalid edit plan:\n{joined_errors}")
+        joined_errors = "\n".join(
+            f"- {error}"
+            for error in validation_errors
+        )
+
+        raise EditExecutionError(
+            f"Invalid edit plan:\n"
+            f"{joined_errors}"
+        )
 
     acad = _get_acad()
-    doc, opened_here = _get_document(acad, target_dwg_path)
-    try:
-        msp = _com_retry(lambda: doc.ModelSpace, "getting model space")
 
-        document_name = _safe_get_document_name(doc)
-        dwg_path = _document_path(doc, target_dwg_path)
-        entity_count_before = _safe_modelspace_count(msp)
+    bookkeeping_warnings: list[str] = []
+    result: dict | None = None
+
+    doc, opened_here = _get_document(
+        acad,
+        target_dwg_path,
+        bookkeeping_warnings,
+    )
+
+    try:
+        msp = _com_retry(
+            lambda: doc.ModelSpace,
+            "getting model space",
+        )
+
+        document_name = (
+            _safe_get_document_name(doc)
+        )
+
+        dwg_path = _document_path(
+            doc,
+            target_dwg_path,
+        )
+
+        entity_count_before = (
+            _safe_modelspace_count(msp)
+        )
 
         backup_path = None
         backup_skipped_reason = None
+
         if save:
-            if dwg_path and Path(dwg_path).is_file():
-                backup_path = str(backup_file(Path(dwg_path)))
+            if (
+                dwg_path
+                and Path(dwg_path).is_file()
+            ):
+                backup_path = str(
+                    backup_file(
+                        Path(dwg_path)
+                    )
+                )
+
             elif not dwg_path:
                 backup_skipped_reason = (
-                    "Backup skipped because the active document is unsaved/untitled "
-                    "and has no file path."
+                    "Backup skipped because the active "
+                    "document is unsaved/untitled and "
+                    "has no file path."
                 )
+
             else:
                 backup_skipped_reason = (
-                    f"Backup skipped because the drawing path is not an existing file: {dwg_path}"
+                    "Backup skipped because the drawing "
+                    "path is not an existing file: "
+                    f"{dwg_path}"
                 )
 
         errors: list[dict[str, Any]] = []
+
         deleted_count = 0
-        delete_handles = edit_plan.get("delete_handles", [])
-        commands = edit_plan.get("commands", [])
+        delete_handles = (
+            edit_plan.get(
+                "delete_handles",
+                [],
+            )
+        )
+
+        commands = edit_plan.get(
+            "commands",
+            [],
+        )
+
         additions_blocked = False
 
         for handle in delete_handles:
             try:
-                _delete_entity_by_handle(doc, handle)
+                _delete_entity_by_handle(
+                    doc,
+                    handle,
+                )
+
                 deleted_count += 1
+
             except Exception as exc:
                 errors.append(
                     {
                         "type": "delete",
                         "handle": handle,
-                        "error": _format_error(exc),
+                        "error":
+                            _format_error(exc),
                     }
                 )
 
@@ -217,68 +304,136 @@ def execute_edit_plan(
         added_executed_count = 0
         added_total_count = len(commands)
 
-        if commands and not additions_blocked:
+        if (
+            commands
+            and not additions_blocked
+        ):
             try:
-                # Against the document this function already opened — not a
-                # freshly-resolved ActiveDocument. Delegating with
-                # `target_dwg_path=None` sent the additions to whatever drawing
-                # happened to be focused while the deletions went here, splitting
-                # one edit across two files and saving only this one.
-                add_result = execute_commands_in_document(
-                    commands,
-                    doc,
-                    continue_on_error=continue_on_error,
+                add_result = (
+                    execute_commands_in_document(
+                        commands,
+                        doc,
+                        continue_on_error=
+                            continue_on_error,
+                    )
                 )
-                added_executed_count = int(add_result.get("executed_count", 0))
-                added_total_count = int(add_result.get("total_count", len(commands)))
-                errors.extend(_normalize_add_errors(add_result))
+
+                added_executed_count = int(
+                    add_result.get(
+                        "executed_count",
+                        0,
+                    )
+                )
+
+                added_total_count = int(
+                    add_result.get(
+                        "total_count",
+                        len(commands),
+                    )
+                )
+
+                errors.extend(
+                    _normalize_add_errors(
+                        add_result
+                    )
+                )
+
             except Exception as exc:
                 errors.append(
                     {
                         "type": "add",
-                        "error": _format_error(exc),
+                        "error":
+                            _format_error(exc),
                     }
                 )
 
         if save and not errors:
             try:
-                _com_retry(lambda: doc.Save(), "saving edited document")
+                _com_retry(
+                    lambda: doc.Save(),
+                    "saving edited document",
+                )
             except Exception as exc:
                 errors.append(
                     {
                         "type": "save",
-                        "error": _format_error(exc),
+                        "error":
+                            _format_error(exc),
                     }
                 )
 
-        entity_count_after = _safe_modelspace_count(msp)
+        entity_count_after = (
+            _safe_modelspace_count(msp)
+        )
+
         zoom_extents_called = False
         zoom_error = None
 
         if zoom_extents:
-            zoom_extents_called, zoom_error = _activate_regen_zoom(acad, doc)
+            (
+                zoom_extents_called,
+                zoom_error,
+            ) = _activate_regen_zoom(
+                acad,
+                doc,
+            )
 
-        return {
-            "ok": not errors,
-            "edit_intent": edit_plan.get("edit_intent"),
-            "summary": edit_plan.get("summary"),
-            "deleted_count": deleted_count,
-            "delete_count": len(delete_handles),
-            "added_executed_count": added_executed_count,
-            "added_total_count": added_total_count,
-            "errors": errors,
-            "document_name": document_name,
-            "dwg_path": dwg_path,
-            "entity_count_before": entity_count_before,
-            "entity_count_after": entity_count_after,
-            "zoom_extents_called": zoom_extents_called,
-            "zoom_error": zoom_error,
-            "backup_path": backup_path,
-            "backup_skipped_reason": backup_skipped_reason,
+        result = {
+            "ok":
+                not errors,
+            "edit_intent":
+                edit_plan.get(
+                    "edit_intent"
+                ),
+            "summary":
+                edit_plan.get("summary"),
+            "deleted_count":
+                deleted_count,
+            "delete_count":
+                len(delete_handles),
+            "added_executed_count":
+                added_executed_count,
+            "added_total_count":
+                added_total_count,
+            "errors":
+                errors,
+            "document_name":
+                document_name,
+            "dwg_path":
+                dwg_path,
+            "entity_count_before":
+                entity_count_before,
+            "entity_count_after":
+                entity_count_after,
+            "zoom_extents_called":
+                zoom_extents_called,
+            "zoom_error":
+                zoom_error,
+            "backup_path":
+                backup_path,
+            "backup_skipped_reason":
+                backup_skipped_reason,
+            "session_bookkeeping_skipped_reason":
+                None,
         }
+
     finally:
-        # Only a document this call opened; one the user already had
-        # open is theirs to keep. Runs after the save, and on the
-        # failure path too.
         if opened_here:
-            _safe_close_document(doc, str(target_dwg_path))
+            _safe_close_document(
+                doc,
+                str(target_dwg_path),
+                bookkeeping_warnings,
+            )
+
+    if result is None:
+        raise EditExecutionError(
+            "Edit execution produced no result"
+        )
+
+    result[
+        "session_bookkeeping_skipped_reason"
+    ] = summarize_bookkeeping_warnings(
+        bookkeeping_warnings
+    )
+
+    return result

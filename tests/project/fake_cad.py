@@ -4,82 +4,979 @@ from types import SimpleNamespace
 import ezdxf
 
 
+class _TrueColor:
+    def __init__(
+        self,
+        rgb=(
+            0,
+            0,
+            0,
+        ),
+    ):
+        (
+            self.Red,
+            self.Green,
+            self.Blue,
+        ) = (
+            int(value)
+            for value
+            in rgb
+        )
+
+    def SetRGB(
+        self,
+        red,
+        green,
+        blue,
+    ):
+        self.Red = int(
+            red
+        )
+
+        self.Green = int(
+            green
+        )
+
+        self.Blue = int(
+            blue
+        )
+
 class Entity:
-    names = {"LINE": "AcDbLine", "CIRCLE": "AcDbCircle", "ARC": "AcDbArc", "INSERT": "AcDbBlockReference",
-             "TEXT": "AcDbText", "ATTRIB": "AcDbAttribute", "LWPOLYLINE": "AcDbPolyline"}
-    fields = {"StartPoint": "start", "EndPoint": "end", "InsertionPoint": "insert", "Center": "center",
-              "Radius": "radius", "Color": "color", "Layer": "layer", "Linetype": "linetype", "TextString": "text", "TagString": "tag"}
+    names = {
+        "LINE":
+            "AcDbLine",
+        "CIRCLE":
+            "AcDbCircle",
+        "ARC":
+            "AcDbArc",
+        "ELLIPSE":
+            "AcDbEllipse",
+        "INSERT":
+            "AcDbBlockReference",
+        "TEXT":
+            "AcDbText",
+        "MTEXT":
+            "AcDbMText",
+        "ATTRIB":
+            "AcDbAttribute",
+        "LWPOLYLINE":
+            "AcDbPolyline",
+        "POLYLINE":
+            "AcDb3dPolyline",
+        "DIMENSION":
+            "AcDbAlignedDimension",
+    }
 
-    def __init__(self, entity):
-        object.__setattr__(self, "entity", entity)
+    fields = {
+        "StartPoint":
+            "start",
+        "EndPoint":
+            "end",
+        "InsertionPoint":
+            "insert",
+        "Center":
+            "center",
+        "Radius":
+            "radius",
+        "Color":
+            "color",
+        "Layer":
+            "layer",
+        "Linetype":
+            "linetype",
+        "TextString":
+            "text",
+        "TagString":
+            "tag",
+        "XScaleFactor":
+            "xscale",
+        "YScaleFactor":
+            "yscale",
+        "ZScaleFactor":
+            "zscale",
+        "RadiusRatio":
+            "ratio",
+    }
 
-    def __getattr__(self, name):
-        if name == "ObjectName":
-            return self.names[self.entity.dxftype()]
-        if name == "Handle":
-            return self.entity.dxf.handle
-        if name == "Normal":
-            return tuple(self.entity.dxf.get("extrusion", (0, 0, 1)))
-        if name == "HasAttributes":
-            return bool(self.entity.attribs)
-        if name == "Closed":
-            # `closed` is a real Python property on LWPolyline/Polyline
-            # (backed by a bit in `dxf.flags`), not a `dxf.closed` attribute —
-            # ezdxf raises `DXFAttributeError` if you try the generic
-            # `fields`-mapped path below, so it needs its own case.
-            return bool(self.entity.closed)
-        if name in self.fields:
-            value = self.entity.dxf.get(self.fields[name])
-            if name in {"StartPoint", "EndPoint", "InsertionPoint", "Center"}:
-                return tuple(value)
+    def __init__(
+        self,
+        entity,
+    ):
+        object.__setattr__(
+            self,
+            "entity",
+            entity,
+        )
+
+    def __getattr__(
+        self,
+        name,
+    ):
+        kind = (
+            self.entity
+            .dxftype()
+        )
+
+        if (
+            name
+            == "ObjectName"
+        ):
+            return self.names[
+                kind
+            ]
+
+        if (
+            name
+            == "Handle"
+        ):
+            return (
+                self.entity
+                .dxf
+                .handle
+            )
+
+        if (
+            name
+            == "Normal"
+        ):
+            return tuple(
+                self.entity
+                .dxf
+                .get(
+                    "extrusion",
+                    (
+                        0,
+                        0,
+                        1,
+                    ),
+                )
+            )
+
+        if (
+            name
+            == "HasAttributes"
+        ):
+            return bool(
+                getattr(
+                    self.entity,
+                    "attribs",
+                    [],
+                )
+            )
+
+        if (
+            name
+            == "Closed"
+        ):
+            return bool(
+                self.entity.closed
+                if kind
+                == "LWPOLYLINE"
+                else self.entity.is_closed
+            )
+
+        if (
+            name
+            == "Rotation"
+        ):
+            return math.radians(
+                float(
+                    self.entity
+                    .dxf
+                    .get(
+                        "rotation",
+                        0.0,
+                    )
+                )
+            )
+
+        if (
+            name
+            == "StartAngle"
+        ):
+            return float(
+                self.entity
+                .dxf
+                .get(
+                    "start_param",
+                    0.0,
+                )
+            )
+
+        if (
+            name
+            == "EndAngle"
+        ):
+            return float(
+                self.entity
+                .dxf
+                .get(
+                    "end_param",
+                    math.tau,
+                )
+            )
+
+        if (
+            name
+            == "TextOverride"
+        ):
+            return (
+                self.entity
+                .dxf
+                .get(
+                    "text",
+                    "",
+                )
+            )
+
+        if (
+            name
+            == "TrueColor"
+        ):
+            return _TrueColor(
+                tuple(
+                    self.entity.rgb
+                )
+                if (
+                    self.entity.rgb
+                    is not None
+                )
+                else (
+                    0,
+                    0,
+                    0,
+                )
+            )
+
+        if (
+            name
+            == "MajorAxis"
+        ):
+            return tuple(
+                self.entity
+                .dxf
+                .major_axis
+            )
+
+        if (
+            name
+            == "MajorRadius"
+        ):
+            axis = tuple(
+                self.entity
+                .dxf
+                .major_axis
+            )
+
+            return math.sqrt(
+                sum(
+                    float(value)
+                    ** 2
+                    for value
+                    in axis
+                )
+            )
+
+        if (
+            name
+            == "MinorRadius"
+        ):
+            return (
+                self.__getattr__(
+                    "MajorRadius"
+                )
+                * float(
+                    self.entity
+                    .dxf
+                    .ratio
+                )
+            )
+
+        if (
+            name
+            == "Coordinates"
+        ):
+            if (
+                kind
+                == "LWPOLYLINE"
+            ):
+                values = []
+
+                for x, y in (
+                    self.entity
+                    .get_points(
+                        "xy"
+                    )
+                ):
+                    values.extend(
+                        (
+                            float(x),
+                            float(y),
+                        )
+                    )
+
+                return tuple(
+                    values
+                )
+
+            if (
+                kind
+                == "POLYLINE"
+            ):
+                values = []
+
+                for vertex in (
+                    self.entity
+                    .vertices
+                ):
+                    location = (
+                        vertex
+                        .dxf
+                        .location
+                    )
+
+                    values.extend(
+                        (
+                            float(
+                                location.x
+                            ),
+                            float(
+                                location.y
+                            ),
+                            float(
+                                location.z
+                            ),
+                        )
+                    )
+
+                return tuple(
+                    values
+                )
+
+        if (
+            name
+            in self.fields
+        ):
+            value = (
+                self.entity
+                .dxf
+                .get(
+                    self.fields[
+                        name
+                    ]
+                )
+            )
+
+            if (
+                name
+                in {
+                    "StartPoint",
+                    "EndPoint",
+                    "InsertionPoint",
+                    "Center",
+                }
+            ):
+                return tuple(
+                    value
+                )
+
             return value
-        raise AttributeError(name)
 
-    def __setattr__(self, name, value):
-        if name == "Closed":
-            self.entity.closed = bool(value)
+        raise AttributeError(
+            name
+        )
+
+    def __setattr__(
+        self,
+        name,
+        value,
+    ):
+        kind = (
+            self.entity
+            .dxftype()
+        )
+
+        if (
+            name
+            == "Closed"
+        ):
+            if (
+                kind
+                == "LWPOLYLINE"
+            ):
+                self.entity.closed = bool(
+                    value
+                )
+            elif bool(
+                value
+            ):
+                self.entity.close()
+            else:
+                self.entity.close(
+                    False
+                )
+
             return
-        # Real AutoCAD requires a `win32com.client.VARIANT` for point-valued
-        # properties and rejects a bare tuple, so `src/cad/session.py`'s
-        # `point()` builds one. A VARIANT is not iterable and ezdxf cannot
-        # consume it directly — unwrap via `.value`, exactly as real COM does
-        # internally. Without this the whole test suite had to monkeypatch
-        # `point` to `tuple`, which meant the real VARIANT path was never
-        # exercised anywhere.
-        if hasattr(value, "value"):
-            value = tuple(value.value)
-        setattr(self.entity.dxf, self.fields[name], value)
 
-    def GetAttributes(self):
-        return [Entity(e) for e in self.entity.attribs]
+        if hasattr(
+            value,
+            "value",
+        ):
+            value = tuple(
+                value.value
+            )
 
-    def SetXData(self, data_types, data_values):
-        """Mirror real AutoCAD's `SetXData(DataType, DataValue)` contract.
+        if (
+            name
+            == "Rotation"
+        ):
+            self.entity.dxf.rotation = (
+                math.degrees(
+                    float(value)
+                )
+            )
 
-        The first entry must be group code 1001 (the registered application
-        name); the rest are the actual XData tags. Persisted through ezdxf's own
-        `set_xdata` on the wrapped real entity so a save+reload round trip (as
-        every integration test in this suite does) produces exactly the XData
-        shape `src/cad/extractor/dxf_extractor.py` reads back.
+            return
 
-        `data_types`/`data_values` may be real `win32com.client.VARIANT`
-        instances (pywin32 is genuinely installed here, so
-        `executor.py`'s `_apply_entity_tag` constructs real ones) rather than
-        plain lists — `VARIANT` is not itself iterable, so unwrap via `.value`.
-        """
-        types = list(data_types.value if hasattr(data_types, "value") else data_types)
-        values = list(data_values.value if hasattr(data_values, "value") else data_values)
-        if not types or types[0] != 1001:
-            raise ValueError("XData must start with a 1001 application-name entry")
+        if (
+            name
+            == "StartAngle"
+        ):
+            self.entity.dxf.start_param = (
+                float(value)
+            )
+
+            return
+
+        if (
+            name
+            == "EndAngle"
+        ):
+            self.entity.dxf.end_param = (
+                float(value)
+            )
+
+            return
+
+        if (
+            name
+            == "TextOverride"
+        ):
+            self.entity.dxf.text = str(
+                value
+            )
+
+            return
+
+        if (
+            name
+            == "TrueColor"
+        ):
+            self.entity.rgb = (
+                int(
+                    value.Red
+                ),
+                int(
+                    value.Green
+                ),
+                int(
+                    value.Blue
+                ),
+            )
+
+            return
+
+        if (
+            name
+            == "MajorAxis"
+        ):
+            self.entity.dxf.major_axis = (
+                tuple(
+                    value
+                )
+            )
+
+            return
+
+        if (
+            name
+            == "MajorRadius"
+        ):
+            axis = tuple(
+                self.entity
+                .dxf
+                .major_axis
+            )
+
+            length = math.sqrt(
+                sum(
+                    float(
+                        component
+                    )
+                    ** 2
+                    for component
+                    in axis
+                )
+            )
+
+            if (
+                length <= 0
+            ):
+                raise ValueError(
+                    "ellipse major axis is zero"
+                )
+
+            factor = (
+                float(value)
+                / length
+            )
+
+            self.entity.dxf.major_axis = tuple(
+                float(
+                    component
+                )
+                * factor
+                for component
+                in axis
+            )
+
+            return
+
+        if (
+            name
+            == "Coordinates"
+        ):
+            values = [
+                float(item)
+                for item
+                in value
+            ]
+
+            if (
+                kind
+                == "LWPOLYLINE"
+            ):
+                self.entity.set_points(
+                    list(
+                        zip(
+                            values[
+                                0::2
+                            ],
+                            values[
+                                1::2
+                            ],
+                        )
+                    ),
+                    format="xy",
+                )
+
+                return
+
+            if (
+                kind
+                == "POLYLINE"
+            ):
+                for (
+                    vertex,
+                    xyz,
+                ) in zip(
+                    self.entity.vertices,
+                    zip(
+                        values[
+                            0::3
+                        ],
+                        values[
+                            1::3
+                        ],
+                        values[
+                            2::3
+                        ],
+                    ),
+                ):
+                    vertex.dxf.location = (
+                        xyz
+                    )
+
+                return
+
+        if (
+            name
+            not in self.fields
+        ):
+            raise AttributeError(
+                name
+            )
+
+        setattr(
+            self.entity.dxf,
+            self.fields[
+                name
+            ],
+            value,
+        )
+
+    @staticmethod
+    def _scale_point(
+        value,
+        basepoint,
+        factor,
+    ):
+        return tuple(
+            basepoint[i]
+            + (
+                float(
+                    value[i]
+                )
+                - basepoint[i]
+            )
+            * factor
+            for i
+            in range(3)
+        )
+
+    def ScaleEntity(
+        self,
+        basepoint,
+        factor,
+    ):
+        base = tuple(
+            float(value)
+            for value
+            in (
+                basepoint.value
+                if hasattr(
+                    basepoint,
+                    "value",
+                )
+                else basepoint
+            )
+        )
+
+        factor = float(
+            factor
+        )
+
+        if factor <= 0:
+            raise ValueError(
+                "scale factor must "
+                "be positive"
+            )
+
+        kind = (
+            self.entity
+            .dxftype()
+        )
+
+        def scale_point(
+            value,
+        ):
+            return self._scale_point(
+                value,
+                base,
+                factor,
+            )
+
+        if (
+            kind
+            == "LINE"
+        ):
+            self.entity.dxf.start = (
+                scale_point(
+                    tuple(
+                        self.entity
+                        .dxf
+                        .start
+                    )
+                )
+            )
+
+            self.entity.dxf.end = (
+                scale_point(
+                    tuple(
+                        self.entity
+                        .dxf
+                        .end
+                    )
+                )
+            )
+
+        elif (
+            kind
+            in {
+                "CIRCLE",
+                "ARC",
+            }
+        ):
+            self.entity.dxf.center = (
+                scale_point(
+                    tuple(
+                        self.entity
+                        .dxf
+                        .center
+                    )
+                )
+            )
+
+            self.entity.dxf.radius = (
+                float(
+                    self.entity
+                    .dxf
+                    .radius
+                )
+                * factor
+            )
+
+        elif (
+            kind
+            == "ELLIPSE"
+        ):
+            self.entity.dxf.center = (
+                scale_point(
+                    tuple(
+                        self.entity
+                        .dxf
+                        .center
+                    )
+                )
+            )
+
+            self.entity.dxf.major_axis = tuple(
+                float(value)
+                * factor
+                for value
+                in (
+                    self.entity
+                    .dxf
+                    .major_axis
+                )
+            )
+
+        elif (
+            kind
+            == "LWPOLYLINE"
+        ):
+            elevation = float(
+                self.entity
+                .dxf
+                .get(
+                    "elevation",
+                    0.0,
+                )
+            )
+
+            points = []
+
+            for (
+                x,
+                y,
+                start_width,
+                end_width,
+                bulge,
+            ) in (
+                self.entity
+                .get_points(
+                    "xyseb"
+                )
+            ):
+                (
+                    px,
+                    py,
+                    pz,
+                ) = scale_point(
+                    (
+                        x,
+                        y,
+                        elevation,
+                    )
+                )
+
+                points.append(
+                    (
+                        px,
+                        py,
+                        start_width
+                        * factor,
+                        end_width
+                        * factor,
+                        bulge,
+                    )
+                )
+
+                elevation = pz
+
+            self.entity.set_points(
+                points,
+                format="xyseb",
+            )
+
+            self.entity.dxf.elevation = (
+                elevation
+            )
+
+        elif (
+            kind
+            == "POLYLINE"
+        ):
+            for vertex in (
+                self.entity
+                .vertices
+            ):
+                vertex.dxf.location = (
+                    scale_point(
+                        tuple(
+                            vertex
+                            .dxf
+                            .location
+                        )
+                    )
+                )
+
+        elif (
+            kind
+            == "INSERT"
+        ):
+            self.entity.dxf.insert = (
+                scale_point(
+                    tuple(
+                        self.entity
+                        .dxf
+                        .insert
+                    )
+                )
+            )
+
+            self.entity.dxf.xscale = (
+                float(
+                    self.entity
+                    .dxf
+                    .get(
+                        "xscale",
+                        1.0,
+                    )
+                )
+                * factor
+            )
+
+            self.entity.dxf.yscale = (
+                float(
+                    self.entity
+                    .dxf
+                    .get(
+                        "yscale",
+                        1.0,
+                    )
+                )
+                * factor
+            )
+
+            self.entity.dxf.zscale = (
+                float(
+                    self.entity
+                    .dxf
+                    .get(
+                        "zscale",
+                        1.0,
+                    )
+                )
+                * factor
+            )
+
+            for attrib in getattr(
+                self.entity,
+                "attribs",
+                [],
+            ):
+                attrib.dxf.insert = (
+                    scale_point(
+                        tuple(
+                            attrib
+                            .dxf
+                            .insert
+                        )
+                    )
+                )
+
+        else:
+            raise ValueError(
+                "ScaleEntity unsupported "
+                f"in fake for {kind}"
+            )
+
+    def GetAttributes(
+        self,
+    ):
+        return [
+            Entity(entity)
+            for entity
+            in getattr(
+                self.entity,
+                "attribs",
+                [],
+            )
+        ]
+
+    def SetXData(
+        self,
+        data_types,
+        data_values,
+    ):
+        types = list(
+            data_types.value
+            if hasattr(
+                data_types,
+                "value",
+            )
+            else data_types
+        )
+
+        values = list(
+            data_values.value
+            if hasattr(
+                data_values,
+                "value",
+            )
+            else data_values
+        )
+
+        if (
+            not types
+            or types[0]
+            != 1001
+        ):
+            raise ValueError(
+                "XData must start with "
+                "a 1001 application-name entry"
+            )
+
         appid = values[0]
-        tags = list(zip(types[1:], values[1:]))
-        self.entity.set_xdata(appid, tags)
 
-    def Delete(self):
-        layout = self.entity.get_layout()
+        self.entity.set_xdata(
+            appid,
+            list(
+                zip(
+                    types[1:],
+                    values[1:],
+                )
+            ),
+        )
+
+    def Delete(
+        self,
+    ):
+        layout = (
+            self.entity
+            .get_layout()
+        )
+
         if layout is None:
-            raise RuntimeError("Entity is not attached to a layout")
-        layout.delete_entity(self.entity)
+            raise RuntimeError(
+                "Entity is not attached "
+                "to a layout"
+            )
+
+        layout.delete_entity(
+            self.entity
+        )
 
 
 def _com_values(value):
@@ -185,53 +1082,391 @@ class ModelSpace:
         return Entity(self.layout[index])
 
 
+_DWGPROPS_STANDARD = {
+    "Title":
+        2,
+    "Subject":
+        3,
+    "Author":
+        4,
+    "Comments":
+        6,
+    "Keywords":
+        7,
+    "RevisionNumber":
+        9,
+}
+
+
+class SummaryInfo:
+    def __init__(
+        self,
+        doc,
+    ):
+        object.__setattr__(
+            self,
+            "_doc",
+            doc,
+        )
+
+        object.__setattr__(
+            self,
+            "_custom",
+            {},
+        )
+
+        for name in (
+            _DWGPROPS_STANDARD
+        ):
+            object.__setattr__(
+                self,
+                name,
+                "",
+            )
+
+        self._load()
+
+    def _load(
+        self,
+    ):
+        try:
+            record = (
+                self._doc
+                .rootdict
+                .get(
+                    "DWGPROPS"
+                )
+            )
+        except Exception:
+            return
+
+        if (
+            record is None
+            or not hasattr(
+                record,
+                "tags",
+            )
+        ):
+            return
+
+        reverse = {
+            code:
+                name
+            for name, code
+            in (
+                _DWGPROPS_STANDARD
+                .items()
+            )
+        }
+
+        for tag in record.tags:
+            if (
+                tag.code
+                in reverse
+            ):
+                object.__setattr__(
+                    self,
+                    reverse[
+                        tag.code
+                    ],
+                    str(
+                        tag.value
+                    ),
+                )
+
+            elif (
+                300
+                <= tag.code
+                <= 309
+                and isinstance(
+                    tag.value,
+                    str,
+                )
+            ):
+                (
+                    key,
+                    separator,
+                    value,
+                ) = (
+                    tag.value
+                    .partition(
+                        "="
+                    )
+                )
+
+                if (
+                    separator
+                    and key
+                ):
+                    self._custom[
+                        key
+                    ] = value
+
+    def _sync(
+        self,
+    ):
+        from ezdxf.lldxf.types import (
+            DXFTag,
+        )
+
+        try:
+            record = (
+                self._doc
+                .rootdict
+                .get(
+                    "DWGPROPS"
+                )
+            )
+        except Exception:
+            record = None
+
+        if record is None:
+            record = (
+                self._doc
+                .rootdict
+                .add_xrecord(
+                    "DWGPROPS"
+                )
+            )
+
+        record.tags.clear()
+
+        record.tags.extend(
+            [
+                DXFTag(
+                    code,
+                    str(
+                        getattr(
+                            self,
+                            name,
+                        )
+                    ),
+                )
+                for name, code
+                in (
+                    _DWGPROPS_STANDARD
+                    .items()
+                )
+            ]
+            + [
+                DXFTag(
+                    300,
+                    (
+                        f"{key}="
+                        f"{value}"
+                    ),
+                )
+                for key, value
+                in sorted(
+                    self._custom
+                    .items()
+                )
+            ]
+        )
+
+    def GetCustomByKey(
+        self,
+        key,
+    ):
+        if (
+            key
+            not in self._custom
+        ):
+            raise KeyError(
+                key
+            )
+
+        return self._custom[
+            key
+        ]
+
+    def AddCustomInfo(
+        self,
+        key,
+        value,
+    ):
+        if (
+            key
+            in self._custom
+        ):
+            raise KeyError(
+                key
+            )
+
+        self._custom[
+            str(key)
+        ] = str(
+            value
+        )
+
+    def SetCustomByKey(
+        self,
+        key,
+        value,
+    ):
+        if (
+            key
+            not in self._custom
+        ):
+            raise KeyError(
+                key
+            )
+
+        self._custom[
+            str(key)
+        ] = str(
+            value
+        )
+
+    def RemoveCustomByKey(
+        self,
+        key,
+    ):
+        del self._custom[
+            key
+        ]
+
+
 class Document:
-    def __init__(self, path):
-        self.FullName = str(path)
-        self.Name = path.name
-        self.data = ezdxf.readfile(path)
+    def __init__(
+        self,
+        path,
+    ):
+        self.FullName = str(
+            path
+        )
+
+        self.Name = (
+            path.name
+        )
+
+        self.data = (
+            ezdxf.readfile(
+                path
+            )
+        )
+
         self.Saved = True
         self.closed = False
-        self.SummaryInfo = SimpleNamespace(Title="", Author="", Subject="", Keywords="", Comments="", RevisionNumber="")
-        self.Layers = Layers(self.data)
-        self.Linetypes = SimpleNamespace(Item=lambda name: self.data.linetypes.get(name))
-        self.RegApps = SimpleNamespace(Add=lambda name: self.data.appids.add(name))
+
+        self.SummaryInfo = (
+            SummaryInfo(
+                self.data
+            )
+        )
+
+        self.Layers = Layers(
+            self.data
+        )
+
+        self.Linetypes = (
+            SimpleNamespace(
+                Item=lambda name:
+                    self.data
+                    .linetypes
+                    .get(
+                        name
+                    )
+            )
+        )
+
+        self.RegApps = (
+            SimpleNamespace(
+                Add=lambda name:
+                    self.data
+                    .appids
+                    .add(
+                        name
+                    )
+            )
+        )
+
         self.lookups = []
         self.save_calls = 0
 
-    def HandleToObject(self, handle):
-        self.lookups.append(handle)
-        return Entity(self.data.entitydb[handle])
+    def HandleToObject(
+        self,
+        handle,
+    ):
+        self.lookups.append(
+            handle
+        )
 
-    def GetVariable(self, name):
-        assert name == "INSUNITS"
+        return Entity(
+            self.data
+            .entitydb[
+                handle
+            ]
+        )
+
+    def GetVariable(
+        self,
+        name,
+    ):
+        assert (
+            name
+            == "INSUNITS"
+        )
+
         return self.data.units
 
-    def Save(self):
+    def Save(
+        self,
+    ):
         self.save_calls += 1
-        self.data.saveas(self.FullName)
+
+        self.SummaryInfo._sync()
+
+        self.data.saveas(
+            self.FullName
+        )
+
         self.Saved = True
 
-    def Close(self, save=False):
+    def Close(
+        self,
+        save=False,
+    ):
         assert not save
+
         self.closed = True
 
     @property
-    def ModelSpace(self):
-        return ModelSpace(self.data.modelspace())
-
+    def ModelSpace(
+        self,
+    ):
+        return ModelSpace(
+            self.data
+            .modelspace()
+        )
 
 class Layer:
-    def __init__(self, layer):
-        self.layer = layer
+    def __init__(
+        self,
+        layer,
+    ):
+        self.layer = (
+            layer
+        )
 
     @property
-    def Color(self):
-        return self.layer.dxf.color
+    def Color(
+        self,
+    ):
+        return (
+            self.layer
+            .dxf
+            .color
+        )
 
     @Color.setter
-    def Color(self, color):
-        self.layer.dxf.color = color
+    def Color(
+        self,
+        color,
+    ):
+        self.layer.dxf.color = (
+            color
+        )
 
 
 class Layers:
@@ -270,8 +1505,33 @@ class Documents:
 
     def Open(self, path):
         from pathlib import Path
+
+        requested = Path(path)
         self.opened.append(path)
-        doc = Document(Path(path))
+
+        # Real AcadDocuments.Open can return an already-open Document instead
+        # of creating another document object. The fake must reproduce that
+        # behaviour or ownership bugs in session.open_document() remain hidden.
+        #
+        # samefile() compares filesystem identity rather than just the path
+        # spelling, which also gives us a reliable way to test aliases.
+        for doc in self.documents:
+            if doc.closed or not getattr(doc, "FullName", None):
+                continue
+
+            try:
+                if Path(doc.FullName).samefile(requested):
+                    return doc
+            except (FileNotFoundError, OSError):
+                # If filesystem identity cannot be checked, retain a sensible
+                # path-based fallback.
+                try:
+                    if Path(doc.FullName).resolve() == requested.resolve():
+                        return doc
+                except (FileNotFoundError, OSError):
+                    pass
+
+        doc = Document(requested)
         self.documents.append(doc)
         return doc
 

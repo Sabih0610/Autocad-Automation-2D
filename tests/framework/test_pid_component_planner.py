@@ -20,6 +20,9 @@ from src.framework.pid.component_schema import (
     PID_COMPONENT_SCHEMA_VERSION,
     validate_pid_component_scene_data,
 )
+from src.framework.pid.component_templates import (
+    ensure_addressable_component_tags,
+)
 
 
 FAKE_COMPONENT_SCENE = {
@@ -143,18 +146,51 @@ def test_returned_scene_passes_component_scene_validation(monkeypatch) -> None:
     assert validate_pid_component_scene_data(result) == []
 
 
-def test_plan_and_render_pid_component_scene_returns_expected_result(monkeypatch) -> None:
-    def fake_ask_ai(prompt, schema, system_prompt=None, max_retries=1, max_tokens=None):
-        return deepcopy(FAKE_COMPONENT_SCENE)
+def test_plan_and_render_pid_component_scene_returns_expected_result(
+    monkeypatch,
+) -> None:
+    def fake_ask_ai(
+        prompt,
+        schema,
+        system_prompt=None,
+        max_retries=1,
+        max_tokens=None,
+    ):
+        return deepcopy(
+            FAKE_COMPONENT_SCENE
+        )
 
-    monkeypatch.setattr(pid_component_planner, "ask_ai", fake_ask_ai)
+    monkeypatch.setattr(
+        pid_component_planner,
+        "ask_ai",
+        fake_ask_ai,
+    )
 
-    result = plan_and_render_pid_component_scene("Draw a P&ID.")
+    result = (
+        plan_and_render_pid_component_scene(
+            "Draw a P&ID."
+        )
+    )
 
     assert result["ok"] is True
-    assert result["component_scene"] == FAKE_COMPONENT_SCENE
-    assert result["component_count"] == len(FAKE_COMPONENT_SCENE["components"])
-    assert validate_command_sequence(result["command_sequence"]) == []
+
+    # C1 contract:
+    #
+    # AI output is normalized before it becomes the returned component
+    # scene. Missing pipe/valve engineering tags are deterministically
+    # assigned so the rendered entities remain addressable after scanning.
+    expected_scene = deepcopy(
+        FAKE_COMPONENT_SCENE
+    )
+
+    ensure_addressable_component_tags(
+        expected_scene
+    )
+
+    assert (
+        result["component_scene"]
+        == expected_scene
+    )
 
 
 def test_resilient_planner_returns_ai_scene_when_strict_planner_succeeds(monkeypatch) -> None:

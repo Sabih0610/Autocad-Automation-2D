@@ -221,26 +221,51 @@ class CAD3DSceneStore:
         self._persist_record(record)
         return record
 
-    def get(self, token: str) -> CAD3DSceneRecord:
-        clean_token = self._clean_token(token)
-        record = self._records.get(clean_token)
+    def get(
+        self,
+        token: str,
+    ) -> CAD3DSceneRecord:
+        clean_token = self._clean_token(
+            token
+        )
+
+        record = self._records.get(
+            clean_token
+        )
+
         if record is not None:
             return record
 
-        record = self._load_record_from_disk(clean_token)
-        self._records[clean_token] = record
-        self._latest_token = clean_token
+        record = self._load_record_from_disk(
+            clean_token
+        )
+
+        self._records[
+            clean_token
+        ] = record
+
+        # Important:
+        # Reading an old record must not mutate
+        # what "latest" means.
         return record
 
-    def get_latest(self) -> CAD3DSceneRecord:
-        if self._latest_token is not None:
-            return self.get(self._latest_token)
-
+    def get_latest(
+        self,
+    ) -> CAD3DSceneRecord:
+        # Always derive latest from record ordering,
+        # including records loaded from disk after restart.
         self._load_all_records_from_disk()
-        if self._latest_token is None:
-            raise CAD3DSceneStoreError("No CAD3D scene records are available")
 
-        return self.get(self._latest_token)
+        if not self._records:
+            raise CAD3DSceneStoreError(
+                "No CAD3D scene records are available"
+            )
+
+        return max(
+            self._records.values(),
+            key=lambda record:
+                record.updated_at,
+        )
 
     def list_records(self, limit: int = 20) -> list[CAD3DSceneRecord]:
         if isinstance(limit, bool) or int(limit) <= 0:

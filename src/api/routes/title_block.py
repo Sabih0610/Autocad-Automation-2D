@@ -6,6 +6,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from src.api.routes._revertible import (
+    run_revertible,
+)
 from src.api.schemas import TitleBlockUpdateRequest
 
 
@@ -51,54 +54,141 @@ def _summarize_results(results: list[dict[str, Any]]) -> dict[str, int]:
 
 
 @router.post("/title-block-update")
-def title_block_update(request: TitleBlockUpdateRequest):
+def title_block_update(
+    request: TitleBlockUpdateRequest,
+):
     import pythoncom
-    from src.use_cases import update_title_block as use_case
+    from src.use_cases import (
+        update_title_block
+        as use_case,
+    )
 
     pythoncom.CoInitialize()
-    drawings_folder = Path(request.drawings_folder)
+
+    drawings_folder = Path(
+        request.drawings_folder
+    )
+
     try:
         if not drawings_folder.exists():
             raise HTTPException(
                 status_code=404,
-                detail=f"Drawings folder not found: {drawings_folder}",
+                detail=(
+                    "Drawings folder not found: "
+                    f"{drawings_folder}"
+                ),
             )
 
         with _temporary_module_settings(
             use_case,
-            DRAWINGS_FOLDER=drawings_folder,
-            FILE_PATTERN=request.file_pattern,
-            TITLE_BLOCK_NAME=request.title_block_name,
-            UPDATES=dict(request.updates),
-            DRY_RUN=request.dry_run,
+            DRAWINGS_FOLDER=
+                drawings_folder,
+            FILE_PATTERN=
+                request.file_pattern,
+            TITLE_BLOCK_NAME=
+                request.title_block_name,
+            UPDATES=
+                dict(request.updates),
+            DRY_RUN=
+                request.dry_run,
         ):
-            files = sorted(use_case.DRAWINGS_FOLDER.glob(use_case.FILE_PATTERN))
+            files = sorted(
+                use_case
+                .DRAWINGS_FOLDER
+                .glob(
+                    use_case.FILE_PATTERN
+                )
+            )
+
             if not files:
                 return {
                     "ok": True,
                     "files": [],
-                    "summary": _summarize_results([]),
+                    "summary":
+                        _summarize_results(
+                            []
+                        ),
                 }
 
             try:
-                connected_to = use_case.get_acad().Caption
+                connected_to = (
+                    use_case
+                    .get_acad()
+                    .Caption
+                )
+
             except Exception as exc:
                 raise HTTPException(
                     status_code=503,
-                    detail=f"Cannot reach AutoCAD: {type(exc).__name__}: {exc}",
+                    detail=(
+                        "Cannot reach AutoCAD: "
+                        f"{type(exc).__name__}: "
+                        f"{exc}"
+                    ),
                 ) from exc
 
             results = []
-            for index, file_path in enumerate(files):
+
+            for index, file_path in enumerate(
+                files
+            ):
                 if index > 0:
-                    time.sleep(use_case.PAUSE_BETWEEN_FILES_SEC)
-                results.append(use_case.process_one_file(file_path, use_case.UPDATES))
+                    time.sleep(
+                        use_case
+                        .PAUSE_BETWEEN_FILES_SEC
+                    )
+
+                def execute_one(
+                    path=file_path,
+                ):
+                    return (
+                        use_case
+                        .process_one_file(
+                            path,
+                            use_case.UPDATES,
+                            create_backup=False,
+                        )
+                    )
+
+                (
+                    result,
+                    change_set_id,
+                    change_set_skipped_reason,
+                ) = run_revertible(
+                    str(file_path),
+                    (
+                        "Update title block "
+                        f"{use_case.TITLE_BLOCK_NAME} "
+                        f"in {file_path.name}"
+                    ),
+                    execute_one,
+                    save=not use_case.DRY_RUN,
+                )
+
+                result = dict(result)
+
+                result[
+                    "change_set_id"
+                ] = change_set_id
+
+                result[
+                    "change_set_skipped_reason"
+                ] = (
+                    change_set_skipped_reason
+                )
+
+                results.append(result)
 
             return {
                 "ok": True,
-                "connected_to": connected_to,
+                "connected_to":
+                    connected_to,
                 "files": results,
-                "summary": _summarize_results(results),
+                "summary":
+                    _summarize_results(
+                        results
+                    ),
             }
+
     finally:
         pythoncom.CoUninitialize()

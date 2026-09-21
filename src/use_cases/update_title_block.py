@@ -124,7 +124,12 @@ def _do_one_file(dwg_path, updates):
         raise
 
 
-def process_one_file(dwg_path, updates):
+def process_one_file(
+    dwg_path,
+    updates,
+    *,
+    create_backup=True,
+):
     result = {
         "file": dwg_path.name,
         "backup": None,
@@ -134,29 +139,65 @@ def process_one_file(dwg_path, updates):
         "error": None,
     }
 
-    if not DRY_RUN:
+    # Standalone/CLI use keeps its historical direct backup.
+    #
+    # The FastAPI route passes create_backup=False because
+    # run_revertible() owns the authoritative backup and
+    # ChangeSet lifecycle for API writes.
+    if (
+        not DRY_RUN
+        and create_backup
+    ):
         try:
-            result["backup"] = str(backup_file(dwg_path))
-        except Exception as e:
+            result["backup"] = str(
+                backup_file(dwg_path)
+            )
+        except Exception as exc:
             result["status"] = "error"
-            result["error"] = f"backup failed: {type(e).__name__}: {e}"
+            result["error"] = (
+                "backup failed: "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
             return result
 
     last_err = None
-    for attempt in range(1, FILE_MAX_RETRIES + 1):
+
+    for attempt in range(
+        1,
+        FILE_MAX_RETRIES + 1,
+    ):
         try:
-            outcome = _do_one_file(dwg_path, updates)
+            outcome = _do_one_file(
+                dwg_path,
+                updates,
+            )
+
             result.update(outcome)
             return result
-        except Exception as e:
-            last_err = e
-            if is_busy_error(e) and attempt < FILE_MAX_RETRIES:
-                time.sleep(FILE_RETRY_DELAY_SEC * attempt)
+
+        except Exception as exc:
+            last_err = exc
+
+            if (
+                is_busy_error(exc)
+                and attempt
+                < FILE_MAX_RETRIES
+            ):
+                time.sleep(
+                    FILE_RETRY_DELAY_SEC
+                    * attempt
+                )
                 continue
+
             break
 
     result["status"] = "error"
-    result["error"] = f"{type(last_err).__name__}: {last_err}"
+    result["error"] = (
+        f"{type(last_err).__name__}: "
+        f"{last_err}"
+    )
+
     return result
 
 

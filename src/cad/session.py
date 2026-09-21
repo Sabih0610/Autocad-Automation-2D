@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from .locks import CAD_LOCK, serialized
-
+import warnings
 
 def canonical_path(path):
     if not path or not Path(path).is_absolute():
@@ -32,47 +32,165 @@ def mark_open(path, is_open):
                      (canonical_path(path), int(is_open)))
 
 
-def open_document(acad, target_dwg_path):
-    """Resolve a document by path, reporting whether *this call* opened it.
+def _snapshot_open_documents(acad):
+    """Return the documents that were open before a potentially destructive open."""
+    return [
+        acad.Documents.Item(index)
+        for index in range(acad.Documents.Count)
+    ]
 
-    Returns `(document, opened_here)`. A caller that opens a drawing for the
-    duration of one operation has to close it again — otherwise every request
-    with an explicit target leaves another drawing open in the user's AutoCAD
-    session, accumulating until they notice. But it must never close one the
-    user already had open, and `opened_here` is the only way to tell the two
-    apart after the fact.
+
+def _same_document_identity(left, right):
+    """Compare two AutoCAD document wrappers by COM identity when available.
+
+    Python object identity is sufficient for the test fake. Real pywin32
+    Dispatch wrappers may be different Python objects referring to the same
+    underlying COM object, so compare their underlying OLE objects when they
+    are available.
     """
+    if left is right:
+        return True
+
+    left_ole = getattr(left, "_oleobj_", None)
+    right_ole = getattr(right, "_oleobj_", None)
+
+    if left_ole is not None and right_ole is not None:
+        try:
+            return bool(left_ole == right_ole)
+        except Exception:
+            pass
+
+    try:
+        return bool(left == right)
+    except Exception:
+        return False
+
+
+def _record_bookkeeping_failure(
+    path,
+    is_open,
+    exc,
+    bookkeeping_warnings=None,
+):
+    state = "open" if is_open else "closed"
+
+    message = (
+        "Drawing-session bookkeeping skipped while marking "
+        f"{path!s} as {state}: {type(exc).__name__}: {exc}"
+    )
+
+    if bookkeeping_warnings is not None:
+        bookkeeping_warnings.append(message)
+    else:
+        warnings.warn(
+            message,
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    return message
+
+
+def summarize_bookkeeping_warnings(
+    bookkeeping_warnings,
+):
+    if not bookkeeping_warnings:
+        return None
+
+    return " | ".join(
+        str(item)
+        for item in bookkeeping_warnings
+    )
+
+
+def open_document(
+    acad,
+    target_dwg_path,
+    bookkeeping_warnings=None,
+):
     path = canonical_path(target_dwg_path)
+
     if not Path(path).is_file():
         raise FileNotFoundError(path)
+
+    open_before = _snapshot_open_documents(acad)
     existing = find_open_document(acad, path)
-    doc = acad.Documents.Open(path) if existing is None else existing
-    if not same_path(doc.FullName, path):
-        raise ValueError("AutoCAD returned a different document than the explicit target")
-    mark_open(path, True)
-    return doc, existing is None
+
+    if existing is not None:
+        doc = existing
+        opened_here = False
+    else:
+        doc = acad.Documents.Open(path)
+
+        opened_here = not any(
+            _same_document_identity(
+                doc,
+                document,
+            )
+            for document in open_before
+        )
+
+    if (
+        opened_here
+        and not same_path(
+            doc.FullName,
+            path,
+        )
+    ):
+        raise ValueError(
+            "AutoCAD returned a different document "
+            "than the explicit target"
+        )
+
+    try:
+        mark_open(
+            path,
+            True,
+        )
+    except Exception as exc:
+        _record_bookkeeping_failure(
+            path,
+            True,
+            exc,
+            bookkeeping_warnings,
+        )
+
+    return doc, opened_here
 
 
-def get_document(acad, target_dwg_path):
-    doc, _opened_here = open_document(acad, target_dwg_path)
+def get_document(
+    acad,
+    target_dwg_path,
+):
+    doc, _opened_here = open_document(
+        acad,
+        target_dwg_path,
+    )
+
     return doc
 
 
-def close_document(doc, target_dwg_path):
-    """Close a document this process opened and clear its open marker.
-
-    The marker has to be cleared even if the close fails, otherwise
-    `rename_file`'s open-file guard refuses to rename the drawing for the rest
-    of the process's life. Never call this for a document the user already had
-    open — see `open_document`.
-    """
+def close_document(
+    doc,
+    target_dwg_path,
+    bookkeeping_warnings=None,
+):
+    """Close our document even when SQLite bookkeeping is unavailable."""
     try:
         doc.Close(False)
     finally:
         try:
-            mark_open(target_dwg_path, False)
-        except Exception:
-            pass
+            mark_open(
+                target_dwg_path,
+                False,
+            )
+        except Exception as exc:
+            _record_bookkeeping_failure(
+                target_dwg_path,
+                False,
+                exc,
+                bookkeeping_warnings,
+            )
 
 
 @contextmanager

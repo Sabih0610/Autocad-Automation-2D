@@ -126,6 +126,11 @@
       const projectName = project.options[project.selectedIndex].textContent;
       const progress = createMessage("system", `Planning an edit in ${projectName}…`);
       const job = await api(`/api/projects/${selected}/plan`, "POST", {prompt, tag: tag.value.trim() || null, drawing_id: drawing.value || null});
+      if (job.status === "clarify") {
+        progress.textContent = "I need one detail before I can plan this edit.";
+        createMessage("assistant", job.message);
+        return;
+      }
       progress.textContent = "Plan ready. Review the affected files before applying.";
       const card = createMessage("assistant", "");
       card.classList.add("project-plan");

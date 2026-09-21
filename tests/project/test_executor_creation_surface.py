@@ -170,3 +170,129 @@ def test_real_variant_points_reach_the_fake_unstubbed(tmp_path, monkeypatch):
     entity.EndPoint = point((42.0, 7.0, 0.0))
 
     assert tuple(fake_doc.data.entitydb[handle].dxf.end) == pytest.approx((42.0, 7.0, 0.0))
+
+
+def test_schema_valid_optional_properties_execute_in_fake(
+    tmp_path,
+    monkeypatch,
+):
+    from src.framework.commands.schema import (
+        validate_command_sequence,
+    )
+
+    commands = [
+        {
+            "command": "TEXT",
+            "text": "ROTATED",
+            "position": [10, 20],
+            "height": 5,
+            "rotation_degrees": 90,
+        },
+        {
+            "command": "ELLIPSE",
+            "center": [100, 100],
+            "major_axis_endpoint":
+                [140, 100],
+            "ratio": 0.5,
+            "start_angle_degrees": 30,
+            "end_angle_degrees": 150,
+        },
+        {
+            "command": "DIM_LINEAR",
+            "from": [0, 0],
+            "to": [100, 0],
+            "dim_line_position":
+                [50, -20],
+            "text_override":
+                "100 TYP",
+        },
+    ]
+
+    assert validate_command_sequence(
+        {
+            "schema_version": "1.0",
+            "summary":
+                "Exercise schema-valid "
+                "optional command properties.",
+            "assumptions": [],
+            "commands": commands,
+        }
+    ) == []
+
+    path = (
+        tmp_path
+        / "optional-properties.dxf"
+    )
+
+    doc = ezdxf.new("R2010")
+    doc.units = 4
+    doc.saveas(path)
+
+    fake_doc = Document(path)
+
+    monkeypatch.setattr(
+        executor,
+        "_get_acad",
+        lambda: Acad([fake_doc]),
+    )
+
+    monkeypatch.setattr(
+        executor,
+        "_active_document",
+        lambda acad: fake_doc,
+    )
+
+    result = executor.execute_commands(
+        commands,
+        save=False,
+        zoom_extents=False,
+    )
+
+    assert result["ok"] is True
+    assert result["errors"] == []
+
+    msp = (
+        fake_doc.data.modelspace()
+    )
+
+    text = next(
+        iter(
+            msp.query("TEXT")
+        )
+    )
+
+    assert (
+        text.dxf.rotation
+        == pytest.approx(90.0)
+    )
+
+    ellipse = next(
+        iter(
+            msp.query("ELLIPSE")
+        )
+    )
+
+    assert (
+        ellipse.dxf.start_param
+        == pytest.approx(
+            math.radians(30.0)
+        )
+    )
+
+    assert (
+        ellipse.dxf.end_param
+        == pytest.approx(
+            math.radians(150.0)
+        )
+    )
+
+    dimension = next(
+        iter(
+            msp.query("DIMENSION")
+        )
+    )
+
+    assert (
+        dimension.dxf.text
+        == "100 TYP"
+    )

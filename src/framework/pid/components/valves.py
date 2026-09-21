@@ -77,5 +77,5 @@ class ControlValveComponent(BasePIDComponent):
             center=self.center,
             size=self.size,
             orientation=self.orientation,
-            tag=self.tag,
+            tag=self.tag or self.id,
         )

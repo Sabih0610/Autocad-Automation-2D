@@ -12,13 +12,190 @@ class PIDComponentTemplateError(Exception):
     """Raised when a deterministic P&ID component template is invalid."""
 
 
-def validate_template_scene(scene: dict) -> dict:
-    """Validate and return a defensive copy of a component template scene."""
-    copied_scene = deepcopy(scene)
-    errors = validate_pid_component_scene_data(copied_scene)
+_AUTO_TAG_COMPONENT_TYPES = {
+    "pipe_run": "P",
+    "gate_valve": "XV",
+    "control_valve": "CV",
+}
+
+
+def _component_tag_prefix(component: dict) -> str:
+    component_id = str(
+        component.get("id", "")
+    ).strip().upper()
+
+    prefix_chars = []
+
+    for char in component_id:
+        if char.isalpha():
+            prefix_chars.append(char)
+            continue
+
+        break
+
+    if prefix_chars:
+        return "".join(prefix_chars)
+
+    return _AUTO_TAG_COMPONENT_TYPES.get(
+        component.get("component_type"),
+        "C",
+    )
+
+
+def ensure_addressable_component_tags(
+    scene: dict,
+) -> dict:
+    """Give every addressable pipe/valve a unique engineering tag.
+
+    Equipment and instrument components already carry explicit engineering
+    tags. Historically, pipe and valve tags were optional, which meant their
+    generated geometry could not later be recovered through the project
+    entity index.
+
+    Missing pipe and valve tags are therefore generated deterministically in
+    PREFIX-NNN form, for example:
+
+        P-101
+        XV-101
+        FV-101
+        LV-101
+
+    Existing tags are never overwritten.
+    """
+    components = scene.get(
+        "components"
+    )
+
+    if not isinstance(
+        components,
+        list,
+    ):
+        return scene
+
+    used_tags = {
+        str(
+            component.get("tag")
+        ).strip().casefold()
+        for component in components
+        if isinstance(component, dict)
+        and isinstance(
+            component.get("tag"),
+            str,
+        )
+        and component.get(
+            "tag",
+            "",
+        ).strip()
+    }
+
+    next_number: dict[
+        str,
+        int,
+    ] = {}
+
+    for component in components:
+        if not isinstance(
+            component,
+            dict,
+        ):
+            continue
+
+        component_type = (
+            component.get(
+                "component_type"
+            )
+        )
+
+        if (
+            component_type
+            not in
+            _AUTO_TAG_COMPONENT_TYPES
+        ):
+            continue
+
+        existing = component.get(
+            "tag"
+        )
+
+        if (
+            isinstance(existing, str)
+            and existing.strip()
+        ):
+            component["tag"] = (
+                existing.strip()
+            )
+            continue
+
+        prefix = (
+            _component_tag_prefix(
+                component
+            )
+        )
+
+        number = max(
+            next_number.get(
+                prefix,
+                100,
+            ) + 1,
+            101,
+        )
+
+        candidate = (
+            f"{prefix}-{number:03d}"
+        )
+
+        while (
+            candidate.casefold()
+            in used_tags
+        ):
+            number += 1
+
+            candidate = (
+                f"{prefix}-{number:03d}"
+            )
+
+        component["tag"] = candidate
+
+        used_tags.add(
+            candidate.casefold()
+        )
+
+        next_number[prefix] = (
+            number
+        )
+
+    return scene
+
+
+def validate_template_scene(
+    scene: dict,
+) -> dict:
+    """Validate and return a defensive, fully-addressable template copy."""
+    copied_scene = deepcopy(
+        scene
+    )
+
+    ensure_addressable_component_tags(
+        copied_scene
+    )
+
+    errors = (
+        validate_pid_component_scene_data(
+            copied_scene
+        )
+    )
+
     if errors:
-        joined_errors = "\n".join(f"- {error}" for error in errors)
-        raise PIDComponentTemplateError(f"Invalid P&ID component template:\n{joined_errors}")
+        joined_errors = "\n".join(
+            f"- {error}"
+            for error in errors
+        )
+
+        raise PIDComponentTemplateError(
+            "Invalid P&ID component template:\n"
+            f"{joined_errors}"
+        )
+
     return copied_scene
 
 

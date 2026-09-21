@@ -145,3 +145,107 @@ END;
 CREATE TRIGGER IF NOT EXISTS geometry_version_delete AFTER DELETE ON entity_geometry BEGIN
     UPDATE spatial_version SET version=version+1 WHERE id=1;
 END;
+
+-- Queryable layer table extracted from the saved drawing.
+CREATE TABLE IF NOT EXISTS drawing_layers (
+    drawing_id TEXT NOT NULL REFERENCES drawings(drawing_id),
+    name TEXT NOT NULL,
+    color INTEGER NOT NULL,
+    true_color TEXT,
+    linetype TEXT,
+    is_off INTEGER NOT NULL DEFAULT 0,
+    is_frozen INTEGER NOT NULL DEFAULT 0,
+    is_locked INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (drawing_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_drawing_layers_name
+ON drawing_layers(
+    name COLLATE NOCASE,
+    drawing_id
+);
+
+-- Queryable DWGPROPS/SummaryInfo extracted from the saved drawing.
+CREATE TABLE IF NOT EXISTS drawing_summary_properties (
+    drawing_id TEXT NOT NULL REFERENCES drawings(drawing_id),
+    key TEXT NOT NULL,
+    value TEXT,
+    PRIMARY KEY (drawing_id, key)
+);
+
+-- ------------------------------------------------------------
+-- Group D query/index surface
+--
+-- Existing databases are migrated by
+-- index_surface_schema.ensure_index_surface().
+-- ------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS entity_tag_provenance (
+    entity_id TEXT PRIMARY KEY
+        REFERENCES entities(entity_id)
+        ON DELETE CASCADE,
+    source TEXT NOT NULL
+        CHECK (
+            source IN (
+                'explicit',
+                'proximity',
+                'none'
+            )
+        )
+);
+
+CREATE TABLE IF NOT EXISTS entity_block_refs (
+    entity_id TEXT PRIMARY KEY
+        REFERENCES entities(entity_id)
+        ON DELETE CASCADE,
+    block_name TEXT NOT NULL,
+    attributes TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS
+    idx_drawings_project_status
+ON drawings(
+    project_id,
+    scan_status,
+    drawing_id
+);
+
+CREATE INDEX IF NOT EXISTS
+    idx_entities_drawing_type
+ON entities(
+    drawing_id,
+    entity_type,
+    handle
+);
+
+CREATE INDEX IF NOT EXISTS
+    idx_entities_drawing_layer
+ON entities(
+    drawing_id,
+    layer COLLATE NOCASE,
+    handle
+);
+
+CREATE INDEX IF NOT EXISTS
+    idx_entity_block_name
+ON entity_block_refs(
+    block_name COLLATE NOCASE,
+    entity_id
+);
+
+CREATE INDEX IF NOT EXISTS
+    idx_entity_properties_key_value
+ON entity_properties(
+    key,
+    value,
+    entity_id
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS entity_search
+USING fts5(
+    entity_id UNINDEXED,
+    project_id UNINDEXED,
+    drawing_id UNINDEXED,
+    text,
+    tokenize='unicode61'
+);
