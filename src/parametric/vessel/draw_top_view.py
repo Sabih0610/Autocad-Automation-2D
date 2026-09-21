@@ -27,6 +27,7 @@ from ezdxf.layouts import Modelspace
 
 from src.parametric.vessel.geometry import (
     compute_head_arc,
+    compute_head_depth,
     compute_nozzle_geometry,
     compute_shell_outline,
 )
@@ -372,7 +373,7 @@ def draw_top_view_centerline(
     origin_y: float = 0.0,
 ) -> None:
     """Draw main top-view vessel centerline."""
-    head_depth = params.internal_diameter_mm / 4.0
+    head_depth = compute_head_depth(params)
     start_x = -head_depth - 100.0
     end_x = params.tangent_to_tangent_mm + head_depth + 100.0
 

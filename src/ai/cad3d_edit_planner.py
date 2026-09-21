@@ -242,9 +242,13 @@ def _parse_move_delta(user_request: str) -> list[float] | None:
         "up": [0.0, 0.0, 1.0],
         "down": [0.0, 0.0, -1.0],
     }
+    directions = "right|left|forward|backward|up|down"
+    distance = r"(?P<distance>\d+(?:\.\d+)?)(?:\s*mm)?\b"
     patterns = [
-        r"(?P<distance>\d+(?:\.\d+)?)\s*(?:mm)?\s*(?:to\s+the\s+)?(?P<direction>right|left|forward|backward|up|down)",
-        r"(?P<direction>right|left|forward|backward|up|down)\s+(?P<distance>\d+(?:\.\d+)?)\s*(?:mm)?",
+        rf"\b(?P<direction>{directions})\b\s+{distance}",
+        # Do not begin a distance match inside an engineering identifier such
+        # as P-101 or V201. Those digits identify the component, not the move.
+        rf"(?<![\w-]){distance}\s+(?:to\s+(?:the\s+)?)?(?P<direction>{directions})\b",
     ]
     for pattern in patterns:
         match = re.search(pattern, normalized)

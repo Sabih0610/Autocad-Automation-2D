@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from src.backup import backup_file
 from src.cad.session import serialized
 from src.framework.commands.edit_schema import validate_edit_plan
 from src.framework.commands.executor import execute_commands
@@ -155,6 +156,21 @@ def execute_edit_plan(
     dwg_path = _document_path(doc, target_dwg_path)
     entity_count_before = _safe_modelspace_count(msp)
 
+    backup_path = None
+    backup_skipped_reason = None
+    if save:
+        if dwg_path and Path(dwg_path).is_file():
+            backup_path = str(backup_file(Path(dwg_path)))
+        elif not dwg_path:
+            backup_skipped_reason = (
+                "Backup skipped because the active document is unsaved/untitled "
+                "and has no file path."
+            )
+        else:
+            backup_skipped_reason = (
+                f"Backup skipped because the drawing path is not an existing file: {dwg_path}"
+            )
+
     errors: list[dict[str, Any]] = []
     deleted_count = 0
     delete_handles = edit_plan.get("delete_handles", [])
@@ -201,7 +217,7 @@ def execute_edit_plan(
                 }
             )
 
-    if save:
+    if save and not errors:
         try:
             _com_retry(lambda: doc.Save(), "saving edited document")
         except Exception as exc:
@@ -234,4 +250,6 @@ def execute_edit_plan(
         "entity_count_after": entity_count_after,
         "zoom_extents_called": zoom_extents_called,
         "zoom_error": zoom_error,
+        "backup_path": backup_path,
+        "backup_skipped_reason": backup_skipped_reason,
     }

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -305,6 +307,66 @@ def test_pid_approve_missing_token_returns_404(client, monkeypatch) -> None:
     response = client.post("/api/pid/approve", json={"token": "missing"})
 
     assert response.status_code == 404
+
+
+def test_pid_approve_expired_token_returns_404(client, monkeypatch) -> None:
+    current_time = datetime(2026, 1, 1, 12, 0, 0)
+    monkeypatch.setattr(pid_routes, "_now", lambda: current_time)
+    response, captured = _generate(client, monkeypatch)
+    token = response.json()["token"]
+    pid_routes._PID_CACHE[token]["created_at"] = (
+        current_time - pid_routes.TOKEN_TTL - timedelta(seconds=1)
+    )
+    _patch_executor(monkeypatch, captured)
+
+    approve = client.post("/api/pid/approve", json={"token": token})
+
+    assert approve.status_code == 404
+    assert token not in pid_routes._PID_CACHE
+    assert captured["execute_calls"] == []
+
+
+def test_pid_approve_token_within_ttl_still_works(client, monkeypatch) -> None:
+    current_time = datetime(2026, 1, 1, 12, 0, 0)
+    monkeypatch.setattr(pid_routes, "_now", lambda: current_time)
+    response, captured = _generate(client, monkeypatch)
+    token = response.json()["token"]
+    pid_routes._PID_CACHE[token]["created_at"] = (
+        current_time - pid_routes.TOKEN_TTL + timedelta(seconds=1)
+    )
+    _patch_executor(monkeypatch, captured)
+
+    approve = client.post("/api/pid/approve", json={"token": token})
+
+    assert approve.status_code == 200
+    assert len(captured["execute_calls"]) == 1
+
+
+def test_pid_purge_removes_expired_token_without_evicting_live_token(
+    client, monkeypatch
+) -> None:
+    current_time = datetime(2026, 1, 1, 12, 0, 0)
+    monkeypatch.setattr(pid_routes, "_now", lambda: current_time)
+    expired_response, captured = _generate(client, monkeypatch)
+    live_response, captured = _generate(client, monkeypatch, captured=captured)
+    expired_token = expired_response.json()["token"]
+    live_token = live_response.json()["token"]
+    pid_routes._PID_CACHE[expired_token]["created_at"] = (
+        current_time - pid_routes.TOKEN_TTL - timedelta(seconds=1)
+    )
+    _patch_executor(monkeypatch, captured)
+
+    expired_approve = client.post(
+        "/api/pid/approve", json={"token": expired_token}
+    )
+
+    assert expired_approve.status_code == 404
+    assert expired_token not in pid_routes._PID_CACHE
+    assert live_token in pid_routes._PID_CACHE
+
+    live_approve = client.post("/api/pid/approve", json={"token": live_token})
+    assert live_approve.status_code == 200
+    assert len(captured["execute_calls"]) == 1
 
 
 def test_pid_approve_passes_save_flag_to_executor(client, monkeypatch) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 
+import ezdxf
 import pytest
 
 from src.cad.locks import CAD_LOCK
@@ -11,6 +12,7 @@ from src.framework.commands.executor import (
     execute_command_sequence,
     execute_commands,
 )
+from src.framework.commands.preview import render_preview
 from src.framework.commands.schema import COMMAND_SCHEMA_VERSION
 
 
@@ -68,6 +70,7 @@ class FakeModelSpace:
     def __init__(self):
         self.lines = []
         self.circles = []
+        self.ellipses = []
         self.texts = []
         self.inserts = []
 
@@ -76,6 +79,7 @@ class FakeModelSpace:
         return (
             len(self.lines)
             + len(self.circles)
+            + len(self.ellipses)
             + len(self.texts)
             + len(self.inserts)
         )
@@ -88,6 +92,11 @@ class FakeModelSpace:
     def AddCircle(self, center, radius):
         entity = FakeEntity("CIRCLE")
         self.circles.append((center, radius, entity))
+        return entity
+
+    def AddEllipse(self, center, major_axis, ratio):
+        entity = FakeEntity("ELLIPSE")
+        self.ellipses.append((center, major_axis, ratio, entity))
         return entity
 
     def AddText(self, text, position, height):
@@ -239,6 +248,30 @@ def test_circle_calls_fake_modelspace_addcircle(fake_doc) -> None:
 
     assert result["ok"] is True
     assert len(fake_doc.ModelSpace.circles) == 1
+
+
+def test_ellipse_uses_preview_major_axis_vector(fake_doc, tmp_path) -> None:
+    command = {
+        "command": "ELLIPSE",
+        "center": [1000, 500],
+        "major_axis_endpoint": [1100, 500],
+        "ratio": 0.5,
+    }
+
+    result = execute_commands([command], save=False, zoom_extents=False)
+    com_center, com_major_axis, ratio, _entity = fake_doc.ModelSpace.ellipses[0]
+
+    output = tmp_path / "ellipse.dxf"
+    render_preview([command], str(output))
+    preview_doc = ezdxf.readfile(output)
+    preview_ellipse = next(iter(preview_doc.modelspace().query("ELLIPSE")))
+    preview_major_axis = tuple(preview_ellipse.dxf.major_axis)
+
+    assert result["ok"] is True
+    assert com_center == (1000.0, 500.0, 0.0)
+    assert com_major_axis == (100.0, 0.0, 0.0)
+    assert ratio == 0.5
+    assert com_major_axis == preview_major_axis
 
 
 def test_text_calls_fake_modelspace_addtext(fake_doc) -> None:

@@ -6,6 +6,8 @@ AutoCAD, API routes, or rendering code.
 
 from __future__ import annotations
 
+import json
+import math
 from typing import Any
 
 from jsonschema import Draft7Validator
@@ -379,8 +381,29 @@ def _format_error(error: Any) -> str:
     return f"{path}: {error.message}"
 
 
+def _find_non_finite_numbers(value: Any, path: tuple[Any, ...] = ()) -> list[str]:
+    errors = []
+    if isinstance(value, float) and not math.isfinite(value):
+        errors.append(
+            f"{_format_path(path)}: non-finite number {value!r} is not allowed."
+        )
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            errors.extend(_find_non_finite_numbers(item, (*path, key)))
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            errors.extend(_find_non_finite_numbers(item, (*path, index)))
+    return errors
+
+
 def validate_command_sequence(data: dict) -> list[str]:
     """Return readable validation errors for a command sequence."""
+    finite_number_errors = []
+    try:
+        json.dumps(data, allow_nan=False)
+    except ValueError:
+        finite_number_errors = _find_non_finite_numbers(data)
+
     errors = sorted(
         _VALIDATOR.iter_errors(data),
         key=lambda error: (
@@ -389,7 +412,7 @@ def validate_command_sequence(data: dict) -> list[str]:
         ),
     )
 
-    return [_format_error(error) for error in errors]
+    return finite_number_errors + [_format_error(error) for error in errors]
 
 
 def is_valid_command_sequence(data: dict) -> bool:

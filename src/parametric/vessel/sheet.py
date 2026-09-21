@@ -23,7 +23,7 @@ from datetime import datetime
 
 from ezdxf.layouts import Modelspace
 
-from src.parametric.vessel.geometry import compute_shell_outline
+from src.parametric.vessel.geometry import compute_head_depth, compute_shell_outline
 from src.parametric.vessel.parameters import VesselParameters
 
 
@@ -183,7 +183,7 @@ def _view_extents_for_current_dimensioned_views(
 
     shell_or = float(shell["shell_outer_radius_mm"])
     tangent_length = float(params.tangent_to_tangent_mm)
-    head_depth = float(params.internal_diameter_mm) / 4.0
+    head_depth = compute_head_depth(params)
 
     # FRONT VIEW:
     # Includes:

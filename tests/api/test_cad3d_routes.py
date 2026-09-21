@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -656,6 +657,7 @@ def test_cad3d_edit_execute_false_does_not_call_executor(client, monkeypatch, sc
 
     assert response.status_code == 200
     assert response.json()["executed"] is False
+    assert response.json()["edited_token"] in cad3d_routes._CAD3D_CACHE
 
 
 def test_cad3d_edit_execute_true_calls_fake_executor(client, monkeypatch, scene_store) -> None:
@@ -664,12 +666,46 @@ def test_cad3d_edit_execute_true_calls_fake_executor(client, monkeypatch, scene_
 
     response = client.post(
         "/api/cad3d/edit",
-        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": True},
+        json={
+            "token": token,
+            "prompt": "Move pump P-101 1000 mm to the right.",
+            "execute": True,
+        },
     )
 
     assert response.status_code == 200
     assert response.json()["executed"] is True
     assert captured["execute_calls"]
+    edited_token = response.json()["edited_token"]
+    assert edited_token not in cad3d_routes._CAD3D_CACHE
+
+    replay = client.post("/api/cad3d/approve", json={"token": edited_token})
+    assert replay.status_code == 404
+    assert len(captured["execute_calls"]) == 1
+
+
+def test_cad3d_edit_failed_execution_keeps_token_for_retry(
+    client, monkeypatch, scene_store
+) -> None:
+    token = _seed_routed_scene(scene_store)
+    failed_result = {**FAKE_3D_EXECUTION_RESULT, "ok": False, "errors": ["failed"]}
+    monkeypatch.setattr(
+        cad3d_routes,
+        "execute_cad3d_scene",
+        lambda *_args, **_kwargs: failed_result,
+    )
+    monkeypatch.setattr(cad3d_routes.pythoncom, "CoInitialize", lambda: None)
+    monkeypatch.setattr(cad3d_routes.pythoncom, "CoUninitialize", lambda: None)
+
+    response = client.post(
+        "/api/cad3d/edit",
+        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": True},
+    )
+
+    edited_token = response.json()["edited_token"]
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert edited_token in cad3d_routes._CAD3D_CACHE
 
 
 def test_cad3d_edit_execute_true_marks_edited_scene_approved(client, monkeypatch, scene_store) -> None:
@@ -805,6 +841,66 @@ def test_cad3d_approve_missing_token_returns_404(client, monkeypatch) -> None:
     response = client.post("/api/cad3d/approve", json={"token": "missing"})
 
     assert response.status_code == 404
+
+
+def test_cad3d_approve_expired_token_returns_404(client, monkeypatch) -> None:
+    current_time = datetime(2026, 1, 1, 12, 0, 0)
+    monkeypatch.setattr(cad3d_routes, "_now", lambda: current_time)
+    response, captured = _generate(client, monkeypatch)
+    token = response.json()["token"]
+    cad3d_routes._CAD3D_CACHE[token]["created_at"] = (
+        current_time - cad3d_routes.TOKEN_TTL - timedelta(seconds=1)
+    )
+    _patch_executor(monkeypatch, captured)
+
+    approve = client.post("/api/cad3d/approve", json={"token": token})
+
+    assert approve.status_code == 404
+    assert token not in cad3d_routes._CAD3D_CACHE
+    assert captured["execute_calls"] == []
+
+
+def test_cad3d_approve_token_within_ttl_still_works(client, monkeypatch) -> None:
+    current_time = datetime(2026, 1, 1, 12, 0, 0)
+    monkeypatch.setattr(cad3d_routes, "_now", lambda: current_time)
+    response, captured = _generate(client, monkeypatch)
+    token = response.json()["token"]
+    cad3d_routes._CAD3D_CACHE[token]["created_at"] = (
+        current_time - cad3d_routes.TOKEN_TTL + timedelta(seconds=1)
+    )
+    _patch_executor(monkeypatch, captured)
+
+    approve = client.post("/api/cad3d/approve", json={"token": token})
+
+    assert approve.status_code == 200
+    assert len(captured["execute_calls"]) == 1
+
+
+def test_cad3d_purge_removes_expired_token_without_evicting_live_token(
+    client, monkeypatch
+) -> None:
+    current_time = datetime(2026, 1, 1, 12, 0, 0)
+    monkeypatch.setattr(cad3d_routes, "_now", lambda: current_time)
+    expired_response, captured = _generate(client, monkeypatch)
+    live_response, captured = _generate(client, monkeypatch, captured=captured)
+    expired_token = expired_response.json()["token"]
+    live_token = live_response.json()["token"]
+    cad3d_routes._CAD3D_CACHE[expired_token]["created_at"] = (
+        current_time - cad3d_routes.TOKEN_TTL - timedelta(seconds=1)
+    )
+    _patch_executor(monkeypatch, captured)
+
+    expired_approve = client.post(
+        "/api/cad3d/approve", json={"token": expired_token}
+    )
+
+    assert expired_approve.status_code == 404
+    assert expired_token not in cad3d_routes._CAD3D_CACHE
+    assert live_token in cad3d_routes._CAD3D_CACHE
+
+    live_approve = client.post("/api/cad3d/approve", json={"token": live_token})
+    assert live_approve.status_code == 200
+    assert len(captured["execute_calls"]) == 1
 
 
 def test_cad3d_approve_passes_save_flag_to_executor(client, monkeypatch) -> None:

@@ -81,6 +81,40 @@ def test_circle_with_negative_radius_fails() -> None:
     assert validate_command_sequence(sequence)
 
 
+def test_circle_with_nan_coordinate_names_non_finite_field() -> None:
+    sequence = _base_sequence(
+        [{"command": "CIRCLE", "center": [float("nan"), 0], "radius": 5}]
+    )
+
+    errors = validate_command_sequence(sequence)
+
+    assert any(
+        "root.commands[0].center[0]" in error and "non-finite" in error
+        for error in errors
+    )
+
+
+def test_circle_with_infinite_radius_is_rejected() -> None:
+    sequence = _base_sequence(
+        [{"command": "CIRCLE", "center": [10, 20], "radius": float("inf")}]
+    )
+
+    errors = validate_command_sequence(sequence)
+
+    assert any(
+        "root.commands[0].radius" in error and "non-finite" in error
+        for error in errors
+    )
+
+
+def test_circle_with_finite_fractional_values_still_passes() -> None:
+    sequence = _base_sequence(
+        [{"command": "CIRCLE", "center": [10.5, -20.25], "radius": 5.75}]
+    )
+
+    assert validate_command_sequence(sequence) == []
+
+
 def test_text_with_empty_text_fails() -> None:
     sequence = _base_sequence(
         [{"command": "TEXT", "text": "", "position": [0, 0]}]

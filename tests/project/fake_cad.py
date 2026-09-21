@@ -65,6 +65,39 @@ class Entity:
         tags = list(zip(types[1:], values[1:]))
         self.entity.set_xdata(appid, tags)
 
+    def Delete(self):
+        layout = self.entity.get_layout()
+        if layout is None:
+            raise RuntimeError("Entity is not attached to a layout")
+        layout.delete_entity(self.entity)
+
+
+def _com_values(value):
+    return tuple(value.value if hasattr(value, "value") else value)
+
+
+class ModelSpace:
+    """Small COM-shaped facade over an ezdxf modelspace layout."""
+
+    def __init__(self, layout):
+        self.layout = layout
+
+    @property
+    def Count(self):
+        return len(self.layout)
+
+    def AddLine(self, start, end):
+        return Entity(self.layout.add_line(_com_values(start), _com_values(end)))
+
+    def __iter__(self):
+        return (Entity(entity) for entity in self.layout)
+
+    def __len__(self):
+        return len(self.layout)
+
+    def __getitem__(self, index):
+        return Entity(self.layout[index])
+
 
 class Document:
     def __init__(self, path):
@@ -99,7 +132,7 @@ class Document:
 
     @property
     def ModelSpace(self):
-        return [Entity(e) for e in self.data.modelspace()]
+        return ModelSpace(self.data.modelspace())
 
 
 class Layer:

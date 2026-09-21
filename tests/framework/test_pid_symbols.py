@@ -137,12 +137,24 @@ def test_signal_line_commands_returns_valid_commands() -> None:
     _assert_valid(commands)
 
 
-@pytest.mark.parametrize("direction", ["RIGHT", "LEFT", "UP", "DOWN"])
-def test_flow_arrow_commands_works_for_all_directions(direction: str) -> None:
+@pytest.mark.parametrize(
+    ("direction", "expected_points"),
+    [
+        ("RIGHT", [[45.0, 0.0], [-45.0, -26.0], [-45.0, 26.0]]),
+        ("LEFT", [[-45.0, 0.0], [45.0, -26.0], [45.0, 26.0]]),
+        ("UP", [[0.0, 45.0], [-26.0, -45.0], [26.0, -45.0]]),
+        ("DOWN", [[0.0, -45.0], [-26.0, 45.0], [26.0, 45.0]]),
+    ],
+)
+def test_flow_arrow_commands_works_for_all_directions(
+    direction: str,
+    expected_points: list[list[float]],
+) -> None:
     commands = flow_arrow_commands(position=[0, 0], direction=direction)
 
     assert commands[0]["command"] == "POLYLINE"
     assert commands[0]["closed"] is True
+    assert commands[0]["points"] == expected_points
     _assert_valid(commands)
 
 

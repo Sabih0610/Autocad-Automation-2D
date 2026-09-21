@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -16,11 +16,24 @@ from src.parametric.vessel.dwg_export import AutoCADNotRunningError
 
 router = APIRouter(prefix="/api/pid", tags=["pid"])
 
+TOKEN_TTL = timedelta(minutes=10)
 _PID_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def _now() -> datetime:
     return datetime.now()
+
+
+def _purge_expired_tokens() -> None:
+    current_time = _now()
+    expired_tokens = [
+        token
+        for token, entry in _PID_CACHE.items()
+        if current_time - entry["created_at"] > TOKEN_TTL
+    ]
+
+    for token in expired_tokens:
+        _PID_CACHE.pop(token, None)
 
 
 def _short_error(exc: Exception, max_length: int = 2000) -> str:
@@ -32,6 +45,8 @@ def _short_error(exc: Exception, max_length: int = 2000) -> str:
 
 @router.post("/generate")
 def pid_generate(request: PIDGenerateRequest):
+    _purge_expired_tokens()
+
     prompt = request.prompt.strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
@@ -89,6 +104,8 @@ def pid_generate(request: PIDGenerateRequest):
 
 @router.post("/approve")
 def pid_approve(request: PIDApproveRequest):
+    _purge_expired_tokens()
+
     cached = _PID_CACHE.get(request.token)
     if cached is None:
         raise HTTPException(
@@ -129,8 +146,8 @@ def pid_approve(request: PIDApproveRequest):
     if ok:
         # A successful approve must consume its token — without this, the
         # exact same P&ID could be re-executed into AutoCAD an unlimited
-        # number of times with one token, since `_PID_CACHE` never expires
-        # entries on its own. A failed attempt (ok=False, e.g. a partial
+        # number of times with one token before its TTL. A failed attempt
+        # (ok=False, e.g. a partial
         # per-command failure) deliberately keeps the token so the caller
         # can retry, matching `/api/autocad/edit`'s and `/api/sketch/
         # approve`'s existing retry-on-failure convention.

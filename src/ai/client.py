@@ -25,12 +25,22 @@ from jsonschema import Draft7Validator, ValidationError
 from openai import OpenAI
 
 
+# Structured 2D command sequences routinely exceed the old 800-token limit;
+# 4000 matches the established scene-planner budgets while remaining below the
+# largest specialized planner cap.
+DEFAULT_MAX_TOKENS = 4000
+
+
 class AIConfigError(Exception):
     """Raised when AI provider config is missing or invalid."""
 
 
 class AIResponseError(Exception):
     """Raised when the AI response is invalid or cannot be validated."""
+
+
+class AIResponseTruncatedError(AIResponseError):
+    """Raised when the provider stops because the output token cap was reached."""
 
 
 def _load_env() -> None:
@@ -86,9 +96,12 @@ def _validate_response(data: Dict[str, Any], schema: Dict[str, Any]) -> None:
 
 def _extract_json(content: str) -> Dict[str, Any]:
     """Parse model response content as JSON."""
+    def reject_non_finite_constant(value: str) -> None:
+        raise ValueError(f"non-finite number literal {value} is not valid JSON")
+
     try:
-        data = json.loads(content)
-    except json.JSONDecodeError as e:
+        data = json.loads(content, parse_constant=reject_non_finite_constant)
+    except (json.JSONDecodeError, ValueError) as e:
         raise AIResponseError(f"AI returned invalid JSON: {e}")
 
     if not isinstance(data, dict):
@@ -127,7 +140,7 @@ JSON schema:
 
 def _resolve_max_tokens(max_tokens: int | None) -> int:
     if max_tokens is None:
-        return 800
+        return DEFAULT_MAX_TOKENS
 
     if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens <= 0:
         raise ValueError("max_tokens must be a positive integer")
@@ -176,7 +189,14 @@ def _ask_deepseek(
                 max_tokens=resolved_max_tokens,
             )
 
-            content = response.choices[0].message.content
+            choice = response.choices[0]
+            if choice.finish_reason == "length":
+                raise AIResponseTruncatedError(
+                    "AI response was truncated because it reached the output "
+                    "token limit. Try a smaller request."
+                )
+
+            content = choice.message.content
 
             if not content:
                 raise AIResponseError("AI returned empty content")
@@ -185,6 +205,9 @@ def _ask_deepseek(
             _validate_response(data, schema)
             return data
 
+        except AIResponseTruncatedError:
+            # Retrying with the same cap only repeats a deterministic truncation.
+            raise
         except Exception as e:
             last_error = e
 

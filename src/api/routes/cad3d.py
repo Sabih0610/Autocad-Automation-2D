@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import time
+from datetime import datetime, timedelta
 from typing import Any
 import uuid
 
@@ -39,7 +39,24 @@ from src.parametric.vessel.dwg_export import AutoCADNotRunningError
 
 router = APIRouter(prefix="/api/cad3d", tags=["cad3d"])
 
+TOKEN_TTL = timedelta(minutes=10)
 _CAD3D_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _now() -> datetime:
+    return datetime.now()
+
+
+def _purge_expired_tokens() -> None:
+    current_time = _now()
+    expired_tokens = [
+        token
+        for token, entry in _CAD3D_CACHE.items()
+        if current_time - entry["created_at"] > TOKEN_TTL
+    ]
+
+    for token in expired_tokens:
+        _CAD3D_CACHE.pop(token, None)
 
 
 def _short_error(exc: Exception, max_length: int = 2000) -> str:
@@ -105,6 +122,8 @@ def _scene_record_detail(record) -> dict:
 
 @router.post("/generate")
 def cad3d_generate(request: CAD3DGenerateRequest):
+    _purge_expired_tokens()
+
     prompt = request.prompt.strip() if request.prompt else None
     drawing_style = request.drawing_style.strip() if request.drawing_style else "simple clean 3D equipment layout"
     example_name = request.example_name.strip() or "simple_component_layout"
@@ -157,7 +176,7 @@ def cad3d_generate(request: CAD3DGenerateRequest):
         "drawing_style": drawing_style,
         "example_name": example_name,
         "scene_data": scene_data,
-        "created_at": time.time(),
+        "created_at": _now(),
         "generation_strategy": generation_strategy,
         "fallback_used": metadata.get("fallback_used", False),
         "fallback_reason": metadata.get("fallback_reason"),
@@ -264,6 +283,8 @@ def cad3d_state_token(token: str):
 
 @router.post("/edit")
 def cad3d_edit(request: CAD3DEditRequest):
+    _purge_expired_tokens()
+
     prompt = request.prompt.strip() if request.prompt else ""
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt cannot be empty.")
@@ -327,7 +348,7 @@ def cad3d_edit(request: CAD3DEditRequest):
         "drawing_style": source_record.drawing_style,
         "example_name": "cad3d_scene_edit",
         "scene_data": edited_scene,
-        "created_at": time.time(),
+        "created_at": _now(),
         "generation_strategy": "cad3d_scene_edit",
         "fallback_used": edit_plan.get("metadata", {}).get("fallback_used", False),
         "fallback_reason": edit_plan.get("metadata", {}).get("ai_planner_error"),
@@ -390,6 +411,12 @@ def cad3d_edit(request: CAD3DEditRequest):
         except CAD3DSceneStoreError as exc:
             scene_state_error = _short_error(exc)
 
+        if execution_result.get("ok"):
+            # Inline execution has already written this scene to AutoCAD, so
+            # consume its approval token just as cad3d_approve does. Failed
+            # execution keeps the token available for an explicit retry.
+            _CAD3D_CACHE.pop(edited_token, None)
+
     response = {
         "ok": scene_state_saved and (not executed or bool(execution_result and execution_result.get("ok"))),
         "source_token": source_token,
@@ -412,6 +439,8 @@ def cad3d_edit(request: CAD3DEditRequest):
 
 @router.post("/approve")
 def cad3d_approve(request: CAD3DApproveRequest):
+    _purge_expired_tokens()
+
     cached = _CAD3D_CACHE.get(request.token)
     if cached is None:
         raise HTTPException(
@@ -490,8 +519,8 @@ def cad3d_approve(request: CAD3DApproveRequest):
     if response["ok"]:
         # A successful approve must consume its token — without this, the
         # exact same 3D scene could be re-executed into AutoCAD an
-        # unlimited number of times with one token, since `_CAD3D_CACHE`
-        # never expires entries on its own. A failed attempt (ok=False)
+        # unlimited number of times with one token before its TTL. A failed
+        # attempt (ok=False)
         # deliberately keeps the token so the caller can retry.
         _CAD3D_CACHE.pop(request.token, None)
 

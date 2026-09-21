@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from functools import wraps
 import inspect
 import json
@@ -60,7 +61,20 @@ AUDIT_ROUTE_MAP = {
     "/api/cad3d/approve": "cad3d_approve",
 }
 CURRENT_AUDIT_JOB_ID: ContextVar[str | None] = ContextVar("current_audit_job_id", default=None)
-CURRENT_AUDIT_COMPLETED: ContextVar[bool] = ContextVar("current_audit_completed", default=False)
+
+
+@dataclass
+class _AuditCompletionState:
+    # Sync endpoints run in a worker thread with a copied context. Mutating a
+    # per-request object is visible to the middleware; assigning a new bool to
+    # the ContextVar in that thread is not.
+    completed: bool = False
+
+
+CURRENT_AUDIT_COMPLETED: ContextVar[_AuditCompletionState | None] = ContextVar(
+    "current_audit_completed",
+    default=None,
+)
 
 
 @asynccontextmanager
@@ -192,7 +206,9 @@ def _log_wrapped_route_success(result: Any) -> None:
             else None
         ),
     )
-    CURRENT_AUDIT_COMPLETED.set(True)
+    completion_state = CURRENT_AUDIT_COMPLETED.get()
+    if completion_state is not None:
+        completion_state.completed = True
 
 
 def _log_wrapped_route_error(exc: Exception) -> None:
@@ -204,7 +220,9 @@ def _log_wrapped_route_error(exc: Exception) -> None:
         status="error",
         error_message=str(exc),
     )
-    CURRENT_AUDIT_COMPLETED.set(True)
+    completion_state = CURRENT_AUDIT_COMPLETED.get()
+    if completion_state is not None:
+        completion_state.completed = True
 
 
 def _install_audit_wrappers() -> None:
@@ -302,22 +320,45 @@ class AuditJobMiddleware:
             user_agent=request_headers.get("user-agent", ""),
         )
         job_id_token = CURRENT_AUDIT_JOB_ID.set(job_id)
-        completed_token = CURRENT_AUDIT_COMPLETED.set(False)
+        completion_state = _AuditCompletionState()
+        completed_token = CURRENT_AUDIT_COMPLETED.set(completion_state)
+
+        response_status: int | None = None
+        request_error: Exception | None = None
 
         async def send_wrapper(message):
+            nonlocal response_status
+            if message["type"] == "http.response.start":
+                response_status = message["status"]
             await send(message)
 
         try:
             await self.app(scope, replay_receive, send_wrapper)
         except Exception as exc:
-            if not CURRENT_AUDIT_COMPLETED.get():
-                log_job_end(
-                    job_id,
-                    status="error",
-                    error_message=str(exc),
-                )
+            request_error = exc
             raise
         finally:
+            if not completion_state.completed:
+                if request_error is not None:
+                    status = "error"
+                    error_message = str(request_error)
+                elif response_status is None:
+                    status = "error"
+                    error_message = "Request ended before an HTTP response was started."
+                elif response_status >= 400:
+                    status = "error"
+                    error_message = f"HTTP {response_status}"
+                else:
+                    status = "ok"
+                    error_message = None
+
+                log_job_end(
+                    job_id,
+                    status=status,
+                    error_message=error_message,
+                )
+                completion_state.completed = True
+
             CURRENT_AUDIT_JOB_ID.reset(job_id_token)
             CURRENT_AUDIT_COMPLETED.reset(completed_token)
 

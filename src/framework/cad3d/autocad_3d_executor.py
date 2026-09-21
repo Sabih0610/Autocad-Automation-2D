@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 from typing import Any, Callable
 
+from src.backup import backup_file
 from src.framework.cad3d.scene_schema import validate_cad3d_scene
 from src.framework.cad3d.routing import (
     CAD3DRoutingError,
@@ -648,6 +649,25 @@ def execute_cad3d_scene(
     else:
         doc = _active_document(acad)
 
+    document_name = _safe_get_document_name(doc)
+    dwg_path = _document_path(doc, target_dwg_path)
+    backup_path = None
+    backup_skipped_reason = None
+    if save:
+        if dwg_path and Path(dwg_path).is_file():
+            backup_path = str(backup_file(Path(dwg_path)))
+        elif not dwg_path:
+            backup_skipped_reason = (
+                "Backup skipped because the active document is unsaved/untitled "
+                "and has no file path."
+            )
+        else:
+            backup_skipped_reason = (
+                f"Backup skipped because the drawing path is not an existing file: {dwg_path}"
+            )
+
+    # An untitled document has no prior on-disk drawing to protect. It is safe
+    # to permit Save after successful execution even though no backup can exist.
     # Presentation layers are best-effort. They should never block geometry.
     presentation_layers_created = False
     presentation_layer_error = None
@@ -658,8 +678,6 @@ def execute_cad3d_scene(
         presentation_layer_error = f"{type(exc).__name__}: {exc}"
 
     msp = _com_retry(lambda: doc.ModelSpace, "getting model space")
-    document_name = _safe_get_document_name(doc)
-    dwg_path = _document_path(doc, target_dwg_path)
     entity_count_before = _safe_modelspace_count(msp)
 
     executed_count = 0
@@ -684,7 +702,7 @@ def execute_cad3d_scene(
                 }
             )
 
-    if save:
+    if save and not errors:
         try:
             _com_retry(lambda: doc.Save(), "saving document")
         except Exception as exc:
@@ -720,4 +738,6 @@ def execute_cad3d_scene(
         "zoom_error": zoom_error,
         "presentation_layers_created": presentation_layers_created,
         "presentation_layer_error": presentation_layer_error,
+        "backup_path": backup_path,
+        "backup_skipped_reason": backup_skipped_reason,
     }

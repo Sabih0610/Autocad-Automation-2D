@@ -14,13 +14,31 @@ from __future__ import annotations
 
 import pytest
 
-from src.parametric.vessel.examples import V201
+from src.parametric.vessel import draw_dimensions
+from src.parametric.vessel.examples import V201, get_all_examples
 from src.parametric.vessel.geometry import (
     compute_head_arc,
     compute_nozzle_geometry,
     compute_shell_outline,
 )
-from src.parametric.vessel.parameters import NozzlePosition, validate_parameters
+from src.parametric.vessel.parameters import Nozzle, NozzlePosition, validate_parameters
+
+
+ALL_EXAMPLES = list(get_all_examples().items())
+
+
+class _RecordedDimension:
+    def render(self) -> None:
+        pass
+
+
+class _DimensionRecorder:
+    def __init__(self) -> None:
+        self.linear_dimensions: list[dict] = []
+
+    def add_linear_dim(self, **kwargs):
+        self.linear_dimensions.append(kwargs)
+        return _RecordedDimension()
 
 
 def test_v201_validates_cleanly():
@@ -75,21 +93,84 @@ def test_head_depth_is_consistent_for_left_and_right_heads():
     assert right_head["minor_axis_mm"] == pytest.approx(505.0, abs=0.01)
 
 
-def test_overall_length_used_by_views_is_consistent():
-    """
-    Overall vessel length for view layout is tangent length plus two head depths.
+@pytest.mark.parametrize(
+    ("example_name", "params"),
+    ALL_EXAMPLES,
+    ids=[name for name, _params in ALL_EXAMPLES],
+)
+def test_overall_length_used_by_views_is_consistent(
+    example_name,
+    params,
+    monkeypatch,
+):
+    """The rendered overall dimension must span the drawn outer head tips."""
+    recorder = _DimensionRecorder()
+    monkeypatch.setattr(draw_dimensions, "_add_text", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        draw_dimensions,
+        "draw_front_view_nozzle_position_dimensions",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        draw_dimensions,
+        "draw_front_view_saddle_dimensions",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        draw_dimensions,
+        "draw_front_view_nozzle_callouts",
+        lambda **_kwargs: None,
+    )
 
-    The design convention uses internal head depth:
-    ID / 4 = 2000 / 4 = 500 mm per side
+    draw_dimensions.draw_front_view_basic_dimensions(recorder, params)
 
-    Overall length:
-    4500 + 500 + 500 = 5500 mm
-    """
-    internal_head_depth = V201.internal_diameter_mm / 4.0
-    overall_length = V201.tangent_to_tangent_mm + (2.0 * internal_head_depth)
+    overall_dimension = recorder.linear_dimensions[1]
+    dimensioned_length = (
+        overall_dimension["p2"][0] - overall_dimension["p1"][0]
+    )
+    left_head = compute_head_arc(params, "left")
+    right_head = compute_head_arc(params, "right")
+    drawn_left_x = left_head["center"][0] - left_head["minor_axis_mm"]
+    drawn_right_x = right_head["center"][0] + right_head["minor_axis_mm"]
+    drawn_length = drawn_right_x - drawn_left_x
 
-    assert internal_head_depth == pytest.approx(500.0, abs=0.01)
-    assert overall_length == pytest.approx(5500.0, abs=0.01)
+    assert dimensioned_length == pytest.approx(drawn_length, abs=0.01), example_name
+
+
+@pytest.mark.parametrize(
+    ("example_name", "params"),
+    ALL_EXAMPLES,
+    ids=[name for name, _params in ALL_EXAMPLES],
+)
+@pytest.mark.parametrize(
+    ("position", "side", "direction"),
+    [
+        (NozzlePosition.LEFT_END, "left", -1.0),
+        (NozzlePosition.RIGHT_END, "right", 1.0),
+    ],
+)
+def test_head_nozzle_positions_sit_on_drawn_head_outline(
+    example_name,
+    params,
+    position,
+    side,
+    direction,
+):
+    nozzle = Nozzle(
+        tag=f"{example_name}_{side}",
+        nominal_size_inches=2.0,
+        position=position,
+        axial_position_mm=0.0,
+    )
+
+    nozzle_geometry = compute_nozzle_geometry(params, nozzle)
+    head = compute_head_arc(params, side)
+    head_tip_x = head["center"][0] + (direction * head["minor_axis_mm"])
+
+    assert nozzle_geometry["insertion_point"] == pytest.approx(
+        (head_tip_x, 0.0, 0.0),
+        abs=0.01,
+    )
 
 
 def test_top_nozzles_keep_same_axial_positions_across_views():

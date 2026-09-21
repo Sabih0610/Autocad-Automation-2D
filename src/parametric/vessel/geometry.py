@@ -63,7 +63,7 @@ def compute_head_arc(params: VesselParameters, side: str) -> dict:
         raise ValueError("Head side must be 'left' or 'right'.")
 
     major_axis_mm = _shell_outer_radius_mm(params)
-    minor_axis_mm = major_axis_mm / 2.0
+    minor_axis_mm = compute_head_depth(params)
 
     if normalized_side == "left":
         return {
@@ -87,11 +87,17 @@ def compute_head_arc(params: VesselParameters, side: str) -> dict:
     }
 
 
+def compute_head_depth(params: VesselParameters) -> float:
+    """Return the axial depth of the rendered outer 2:1 ellipsoidal head."""
+
+    return _shell_outer_radius_mm(params) / 2.0
+
+
 def compute_nozzle_geometry(params: VesselParameters, nozzle: Nozzle) -> dict:
     """Return insertion, tip, centerline, and reference-size metadata for one nozzle."""
 
     shell_outer_radius_mm = _shell_outer_radius_mm(params)
-    head_depth_mm = _head_depth_inner_mm(params)
+    head_depth_mm = compute_head_depth(params)
 
     if nozzle.position == NozzlePosition.TOP:
         insertion_point = (nozzle.axial_position_mm, shell_outer_radius_mm, 0.0)
@@ -192,7 +198,7 @@ def compute_saddle_geometry(params: VesselParameters, saddle: Saddle) -> dict:
 def compute_centerlines(params: VesselParameters) -> dict:
     """Return the main vessel centerline and 2D nozzle centerline projections."""
 
-    head_depth_mm = _head_depth_inner_mm(params)
+    head_depth_mm = compute_head_depth(params)
     nozzle_centerlines = []
 
     for nozzle in params.nozzles:
@@ -224,10 +230,6 @@ def _shell_outer_radius_mm(params: VesselParameters) -> float:
     return (params.internal_diameter_mm / 2.0) + params.wall_thickness_mm
 
 
-def _head_depth_inner_mm(params: VesselParameters) -> float:
-    return params.internal_diameter_mm / 4.0
-
-
 def _resolved_side_angle_degrees(nozzle: Nozzle) -> float:
     if nozzle.position == NozzlePosition.SIDE_FRONT:
         return float(nozzle.radial_angle_degrees)
@@ -245,7 +247,7 @@ def _lookup_flange_od_mm(nominal_size_inches: float) -> float:
 
 
 def _axis_point_for_nozzle(params: VesselParameters, nozzle: Nozzle) -> tuple[float, float]:
-    head_depth_mm = _head_depth_inner_mm(params)
+    head_depth_mm = compute_head_depth(params)
     if nozzle.position == NozzlePosition.LEFT_END:
         return (-head_depth_mm, 0.0)
     if nozzle.position == NozzlePosition.RIGHT_END:

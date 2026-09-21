@@ -10,6 +10,7 @@ import math
 from pathlib import Path
 from typing import Any, Callable
 
+from src.backup import backup_file
 from src.cad.session import serialized
 from src.parametric.vessel.dwg_export import (
     AutoCADNotRunningError,
@@ -241,10 +242,16 @@ def _execute_arc(command: dict, msp: Any, layers: Any, known_layers: set[str]) -
 
 def _execute_ellipse(command: dict, msp: Any, layers: Any, known_layers: set[str]) -> Any:
     layer_name = _prepare_layer(command, layers, known_layers)
+    center = command["center"]
+    endpoint = command["major_axis_endpoint"]
+    major_axis = [
+        float(endpoint[0]) - float(center[0]),
+        float(endpoint[1]) - float(center[1]),
+    ]
     entity = _com_retry(
         lambda: msp.AddEllipse(
-            _point_from_pair(command["center"]),
-            _point_from_pair(command["major_axis_endpoint"]),
+            _point_from_pair(center),
+            _point_from_pair(major_axis),
             float(command["ratio"]),
         ),
         "adding ellipse",
@@ -488,6 +495,21 @@ def execute_commands(
     dwg_path = _document_path(doc, target_dwg_path)
     entity_count_before = _safe_modelspace_count(msp)
 
+    backup_path = None
+    backup_skipped_reason = None
+    if save:
+        if dwg_path and Path(dwg_path).is_file():
+            backup_path = str(backup_file(Path(dwg_path)))
+        elif not dwg_path:
+            backup_skipped_reason = (
+                "Backup skipped because the active document is unsaved/untitled "
+                "and has no file path."
+            )
+        else:
+            backup_skipped_reason = (
+                f"Backup skipped because the drawing path is not an existing file: {dwg_path}"
+            )
+
     executed_count = 0
     errors: list[dict[str, Any]] = []
 
@@ -507,7 +529,7 @@ def execute_commands(
             if not continue_on_error:
                 break
 
-    if save:
+    if save and not errors:
         try:
             _com_retry(lambda: doc.Save(), "saving document")
         except Exception as exc:
@@ -537,6 +559,8 @@ def execute_commands(
         "entity_count_after": entity_count_after,
         "zoom_extents_called": zoom_extents_called,
         "zoom_error": zoom_error,
+        "backup_path": backup_path,
+        "backup_skipped_reason": backup_skipped_reason,
     }
 
 

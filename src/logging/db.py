@@ -1,9 +1,10 @@
+import os
 from pathlib import Path
 import sqlite3
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = PROJECT_ROOT / "jobs.db"
+DB_PATH = Path(os.environ.get("AUTOCAD_AI_DB_PATH") or PROJECT_ROOT / "jobs.db")
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS jobs (

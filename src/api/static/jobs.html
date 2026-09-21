@@ -120,6 +120,12 @@
     const limitSelect = document.getElementById("limit");
     const refreshButton = document.getElementById("refresh");
 
+    function escapeText(value) {
+      const div = document.createElement("div");
+      div.textContent = value == null ? "" : String(value);
+      return div.innerHTML;
+    }
+
     function truncateError(value) {
       if (!value) {
         return "";
@@ -153,13 +159,13 @@
       for (const job of jobs) {
         const row = document.createElement("tr");
         row.innerHTML = `
-          <td>${job.timestamp_start || ""}</td>
-          <td>${job.source || ""}</td>
-          <td>${job.use_case || ""}</td>
-          <td>${job.status || ""}</td>
-          <td>${job.duration_seconds ?? ""}</td>
-          <td>${truncateError(job.error_message)}</td>
-          <td><a href="/jobs.html?job_id=${encodeURIComponent(job.job_id)}">View</a></td>
+          <td>${escapeText(job.timestamp_start || "")}</td>
+          <td>${escapeText(job.source || "")}</td>
+          <td>${escapeText(job.use_case || "")}</td>
+          <td>${escapeText(job.status || "")}</td>
+          <td>${escapeText(job.duration_seconds ?? "")}</td>
+          <td>${escapeText(truncateError(job.error_message))}</td>
+          <td><a href="/jobs.html?job_id=${escapeText(encodeURIComponent(job.job_id ?? ""))}">View</a></td>
         `;
         jobsBody.appendChild(row);
       }

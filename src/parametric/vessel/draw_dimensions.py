@@ -16,7 +16,11 @@ from __future__ import annotations
 from ezdxf.layouts import Modelspace
 
 from src.parametric.vessel.dimstyle import DIMSTYLE_NAME
-from src.parametric.vessel.geometry import compute_nozzle_geometry, compute_shell_outline
+from src.parametric.vessel.geometry import (
+    compute_head_depth,
+    compute_nozzle_geometry,
+    compute_shell_outline,
+)
 from src.parametric.vessel.parameters import NozzlePosition, VesselParameters
 
 
@@ -84,10 +88,10 @@ def draw_front_view_basic_dimensions(
     shell_outer_radius = float(shell["shell_outer_radius_mm"])
     tangent_length = float(params.tangent_to_tangent_mm)
 
-    design_head_depth = float(params.internal_diameter_mm) / 4.0
+    head_depth = compute_head_depth(params)
 
-    left_overall_x = -design_head_depth
-    right_overall_x = tangent_length + design_head_depth
+    left_overall_x = -head_depth
+    right_overall_x = tangent_length + head_depth
 
     tangent_dim_y = -shell_outer_radius - 650.0
     overall_dim_y = -shell_outer_radius - 1150.0

@@ -91,10 +91,29 @@ def test_resilient_fallback_move_prompt_creates_move_component_plan(monkeypatch)
     assert plan["operations"][0]["delta"] == [1000.0, 0.0, 0.0]
 
 
-def test_fallback_maps_tag_to_component_id() -> None:
-    plan = deterministic_edit_plan_from_request("Move P-101 right 500", _scene())
+@pytest.mark.parametrize(
+    ("user_request", "component_id", "expected_delta"),
+    [
+        ("Move P-101 right 500", "P101", [500.0, 0.0, 0.0]),
+        ("move P-101 up 500 mm", "P101", [0.0, 0.0, 500.0]),
+        ("shift T-101 left 250", "T101", [-250.0, 0.0, 0.0]),
+        ("move V201 down 300 mm", "V201", [0.0, 0.0, -300.0]),
+        ("move the pump up 500 mm", "P101", [0.0, 0.0, 500.0]),
+        ("move P-101 1000 mm to the right", "P101", [1000.0, 0.0, 0.0]),
+    ],
+)
+def test_fallback_maps_tag_to_component_id(
+    user_request: str,
+    component_id: str,
+    expected_delta: list[float],
+) -> None:
+    plan = deterministic_edit_plan_from_request(user_request, _scene())
 
-    assert plan["operations"][0]["component_id"] == "P101"
+    assert plan["operations"][0] == {
+        "operation_type": "move_component",
+        "component_id": component_id,
+        "delta": expected_delta,
+    }
 
 
 def test_fallback_delete_prompt_creates_delete_component_plan() -> None:

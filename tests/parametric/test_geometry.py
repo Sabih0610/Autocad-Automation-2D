@@ -9,6 +9,7 @@ from src.parametric.vessel.examples import V201
 from src.parametric.vessel.geometry import (
     compute_centerlines,
     compute_head_arc,
+    compute_head_depth,
     compute_nozzle_geometry,
     compute_saddle_geometry,
     compute_shell_outline,
@@ -59,10 +60,10 @@ def test_compute_head_arc_right_uses_right_tangent_center() -> None:
     assert arc["extends_negative_x"] is False
 
 
-def test_overall_length_uses_internal_head_depth() -> None:
+def test_overall_length_uses_drawn_outer_head_depth() -> None:
     params = make_v201()
-    overall_length_mm = params.tangent_to_tangent_mm + (2.0 * (params.internal_diameter_mm / 4.0))
-    assert overall_length_mm == pytest.approx(5500.0, abs=0.01)
+    overall_length_mm = params.tangent_to_tangent_mm + (2.0 * compute_head_depth(params))
+    assert overall_length_mm == pytest.approx(5510.0, abs=0.01)
 
 
 def test_compute_nozzle_geometry_for_top_nozzle_returns_expected_insertion_and_direction() -> None:
@@ -138,7 +139,7 @@ def test_compute_nozzle_geometry_for_left_end_uses_head_depth() -> None:
         axial_position_mm=1000.0,
     )
     nozzle_geometry = compute_nozzle_geometry(params, nozzle)
-    assert nozzle_geometry["insertion_point"] == pytest.approx((-500.0, 0.0, 0.0), abs=0.01)
+    assert nozzle_geometry["insertion_point"] == pytest.approx((-505.0, 0.0, 0.0), abs=0.01)
     assert nozzle_geometry["centerline_direction"] == pytest.approx((-1.0, 0.0, 0.0), abs=0.01)
 
 
@@ -151,7 +152,7 @@ def test_compute_nozzle_geometry_for_right_end_uses_head_depth() -> None:
         axial_position_mm=1000.0,
     )
     nozzle_geometry = compute_nozzle_geometry(params, nozzle)
-    assert nozzle_geometry["insertion_point"] == pytest.approx((5000.0, 0.0, 0.0), abs=0.01)
+    assert nozzle_geometry["insertion_point"] == pytest.approx((5005.0, 0.0, 0.0), abs=0.01)
     assert nozzle_geometry["centerline_direction"] == pytest.approx((1.0, 0.0, 0.0), abs=0.01)
 
 
@@ -203,7 +204,7 @@ def test_compute_saddle_geometry_returns_expected_point_count() -> None:
 
 def test_compute_centerlines_returns_expected_main_horizontal_line() -> None:
     centerlines = compute_centerlines(make_v201())
-    assert centerlines["main_horizontal"] == ((-600.0, 0.0), (5100.0, 0.0))
+    assert centerlines["main_horizontal"] == ((-605.0, 0.0), (5105.0, 0.0))
 
 
 def test_compute_centerlines_returns_extended_top_nozzle_line() -> None:

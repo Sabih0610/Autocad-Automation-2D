@@ -525,7 +525,7 @@ def flow_arrow_commands(
     elif direction == "UP":
         points = [[x, y + half], [x - width, y - half], [x + width, y - half]]
     else:
-        points = [[x, y - half], [x - width, y + width], [x + width, y + width]]
+        points = [[x, y - half], [x - width, y + half], [x + width, y + half]]
 
     return [
         {
