@@ -45,7 +45,12 @@ def _get_document(acad: Any, target_dwg_path: str | None):
     inherits the is_file check, the already-open lookup and the FullName
     identity check — and so the caller knows whether to close it again.
     """
-    if target_dwg_path:
+    # `is not None`, not truthiness: an explicitly-sent empty string is a
+    # caller naming a target badly, not declining to name one. Treating it as
+    # absent silently redirected the write to whatever drawing was focused —
+    # unbacked-up — which is precisely the fallback this is meant to prevent.
+    # Forwarded instead, so canonical_path rejects it by name.
+    if target_dwg_path is not None:
         return _com_retry(
             lambda: open_document(acad, str(target_dwg_path)),
             f"opening DWG {target_dwg_path}",

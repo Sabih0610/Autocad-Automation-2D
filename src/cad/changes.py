@@ -186,10 +186,30 @@ class ChangeManager:
         with connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             for path in targets:
-                conflict = conn.execute("""SELECT 1 FROM change_set_files f JOIN change_sets c ON c.change_set_id=f.change_set_id
-                    WHERE (f.original_path=? OR f.current_path=?) AND c.status IN ('applying','pending','error','reverting')""", (path, path)).fetchone()
-                if conflict:
+                conflicts = conn.execute("""SELECT c.change_set_id, c.status, f.drawing_id
+                    FROM change_set_files f JOIN change_sets c ON c.change_set_id=f.change_set_id
+                    WHERE (f.original_path=? OR f.current_path=?) AND c.status IN ('applying','pending','error','reverting')""", (path, path)).fetchall()
+                # A previous file-level write that is merely awaiting a decision
+                # is superseded, not a conflict. Writing a second sketch into
+                # the same drawing is ordinary use, and blocking it would put
+                # the drawing out of service for exactly the reason the
+                # stuck-changeset work set out to eliminate — with no UI to
+                # resolve it. Each write keeps its own backup, so the
+                # changesets form an undo chain: reverting the newest returns
+                # the drawing to the state the previous write left it in.
+                supersedable = [
+                    row for row in conflicts
+                    if row["drawing_id"] is None and row["status"] == "pending"
+                ]
+                blocking = [row for row in conflicts if row not in supersedable]
+                if blocking:
+                    # A project changeset, or one left in applying/error/
+                    # reverting, represents a decision the user still has to
+                    # make. Superseding it silently would discard that.
                     raise ValueError("Resolve the existing pending changeset for this drawing first")
+                for row in supersedable:
+                    conn.execute("UPDATE change_sets SET status='superseded' WHERE change_set_id=?",
+                                 (row["change_set_id"],))
             change_id = uuid4().hex
             conn.execute("INSERT INTO change_sets VALUES (?,?,?,'applying',?)", (change_id, None, summary, now()))
             for path in targets:

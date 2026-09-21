@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
-from src.api.routes._revertible import run_revertible
+from src.api.routes._revertible import require_explicit_target, run_revertible
 from src.api.schemas import PlaceSymbolRequest
 
 
@@ -18,6 +18,12 @@ def place_symbol(request: PlaceSymbolRequest):
     try:
         if not prompt:
             raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+
+        # This route has no target_dwg_path at all — `connect_to_autocad`
+        # always resolves the focused drawing — so the opt-in is the only way
+        # a caller can say they meant that.
+        if request.execute:
+            require_explicit_target(None, request.use_active_document)
 
         try:
             planned_spec = plan_symbol_placement(prompt)

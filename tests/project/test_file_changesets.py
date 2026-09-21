@@ -94,9 +94,54 @@ def _all_change_sets():
     return [get_change_set(change_id) for change_id in ids]
 
 
-def test_a_second_changeset_on_the_same_drawing_is_refused_while_one_is_pending(drawing):
+def test_repeated_writes_supersede_rather_than_block_the_drawing(drawing):
+    """Writing a second sketch into the same drawing is ordinary use.
+
+    Blocking it would put the drawing out of service for exactly the reason
+    the stuck-changeset work set out to eliminate — and no page except
+    project-chat renders a change_set_id, so there would be no way to resolve
+    it. Each write keeps its own backup, so the changesets form an undo chain.
+    """
     manager = ChangeManager()
-    manager.apply_file_edit([str(drawing)], "first write", lambda: {"ok": True})
+    original = drawing.read_bytes()
+
+    _, first = manager.apply_file_edit(
+        [str(drawing)], "first write", lambda: (_corrupt(drawing, b"-A"), {"ok": True})[1]
+    )
+    after_first = drawing.read_bytes()
+    _, second = manager.apply_file_edit(
+        [str(drawing)], "second write", lambda: (_corrupt(drawing, b"-B"), {"ok": True})[1]
+    )
+
+    assert get_change_set(first)["status"] == "superseded"
+    assert get_change_set(second)["status"] == "pending"
+
+    # Reverting the newest returns the drawing to what the previous write left.
+    manager.revert(second)
+    assert drawing.read_bytes() == after_first
+    assert drawing.read_bytes() != original
+
+
+def test_a_project_changeset_still_blocks_a_file_level_write(drawing, monkeypatch):
+    """Only a *file-level* changeset awaiting a decision is superseded. A
+    project changeset represents a per-entity edit the user still has to keep
+    or revert, and silently discarding that decision would lose real work."""
+    from src.storage.database import connection
+    from src.cad.scanner import file_hash
+
+    manager = ChangeManager()
+    _, existing = manager.apply_file_edit([str(drawing)], "first write", lambda: {"ok": True})
+
+    # Promote it to look like a project changeset (drawing_id set).
+    with connection() as conn:
+        conn.execute("INSERT INTO projects VALUES ('p1','P','/x','active','t','t')")
+        conn.execute(
+            "INSERT INTO drawings VALUES ('d1','p1',?,?,?,NULL,NULL,NULL,'scanned',NULL)",
+            (str(drawing), drawing.name, file_hash(drawing)),
+        )
+        conn.execute(
+            "UPDATE change_set_files SET drawing_id='d1' WHERE change_set_id=?", (existing,)
+        )
 
     with pytest.raises(ValueError, match="Resolve the existing pending changeset"):
         manager.apply_file_edit([str(drawing)], "second write", lambda: {"ok": True})

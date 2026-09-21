@@ -74,6 +74,13 @@ class PlaceSymbolRequest(BaseModel):
         default=False,
         description="When false, run dry-run validation only. Set true to insert the planned symbol into the active drawing.",
     )
+    use_active_document: bool = Field(
+        default=False,
+        description=(
+            "Required to place a symbol, which always writes to whichever drawing "
+            "AutoCAD currently has focused."
+        ),
+    )
 
 
 class ConsistencyCheckRequest(BaseModel):

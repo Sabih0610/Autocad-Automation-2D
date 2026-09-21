@@ -555,7 +555,12 @@ def execute_commands(
     acad = _get_acad()
 
     opened_here = False
-    if target_dwg_path:
+    # `is not None`, not truthiness: an explicitly-sent empty string is a
+    # caller naming a target badly, not declining to name one. Treating it as
+    # absent silently redirected the write to whatever drawing was focused —
+    # unbacked-up — which is precisely the fallback this is meant to prevent.
+    # Forwarded instead, so canonical_path rejects it by name.
+    if target_dwg_path is not None:
         # Via session.open_document rather than Documents.Open directly: that
         # gives the is_file check, the already-open lookup and the FullName
         # identity check, and tells us whether to close the document again.

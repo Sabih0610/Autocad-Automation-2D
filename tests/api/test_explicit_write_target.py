@@ -107,24 +107,34 @@ def test_the_opt_in_is_honoured(client, monkeypatch):
     assert len(calls) == 1
 
 
-def test_an_explicit_empty_target_is_not_treated_as_no_target(client, monkeypatch):
+def test_an_explicit_empty_target_never_silently_becomes_the_active_document(client, monkeypatch):
     """An empty string is a caller naming a target badly, not declining to name
-    one. It must be forwarded and rejected on its own terms, not folded into
-    the "no target given" case."""
+    one — and it must not end up writing to the focused drawing.
+
+    An earlier version of this test wrapped its assertion in
+    `if response.status_code == 400:`, which made it pass vacuously on the
+    200 path that was the actual bug: the guard let `""` through on
+    `is not None`, and the executor's own falsy check then redirected the
+    write to `ActiveDocument`, unbacked-up."""
     token = _seed_pid_token()
-    monkeypatch.setattr(
-        pid_routes,
-        "execute_command_sequence",
-        lambda *a, **k: {"ok": True, "executed_count": 0, "total_count": 0, "errors": []},
-    )
+    seen = []
+
+    def record(command_sequence, target_dwg_path=None, **kwargs):
+        seen.append(target_dwg_path)
+        return {"ok": True, "executed_count": 0, "total_count": 0, "errors": []}
+
+    monkeypatch.setattr(pid_routes, "execute_command_sequence", record)
 
     response = client.post(
         "/api/pid/approve", json={"token": token, "target_dwg_path": ""}
     )
 
-    # Whatever happens next, it must not be the "you did not name a target"
-    # rejection — that would erase the distinction.
-    if response.status_code == 400:
+    # Unconditional: either it was rejected on the path's own terms, or the
+    # empty target reached the executor verbatim. What must never happen is a
+    # silent fallback to the active document.
+    if response.status_code == 200:
+        assert seen == [""], "the empty target was dropped instead of forwarded"
+    else:
         assert "use_active_document" not in response.json()["detail"]
 
 
