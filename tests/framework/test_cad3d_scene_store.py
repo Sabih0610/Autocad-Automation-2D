@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 
 import pytest
 
+from src.framework.cad3d import scene_store
 from src.framework.cad3d.scene_schema import CAD3D_SCENE_SCHEMA_VERSION
 from src.framework.cad3d.scene_store import (
     CAD3DSceneStore,
@@ -78,6 +80,43 @@ def test_list_records_returns_newest_first() -> None:
     store.put_generated_scene("tok2", "second", _scene())
 
     assert [record.token for record in store.list_records()] == ["tok2", "tok1"]
+
+
+def test_ordering_is_stable_for_records_written_in_the_same_clock_tick(tmp_path, monkeypatch) -> None:
+    """`datetime.now()` resolves to roughly 15.6ms on Windows, so scenes
+    written back-to-back used to receive byte-identical `updated_at` strings.
+    Every ordering site sorts on that string, and Python's sort is stable, so
+    a tie silently returned records oldest-first and `get_latest()` picked the
+    wrong scene — which `/api/cad3d/edit` then edits when given no token.
+
+    The clock is frozen rather than merely called quickly: relying on real
+    timing made this pass by luck whenever the interpreter was slow enough
+    between writes, which is exactly how the original bug hid."""
+    frozen = datetime(2026, 9, 21, 12, 0, 0, tzinfo=timezone.utc)
+
+    class _FrozenClock:
+        @staticmethod
+        def now(tz=None):
+            return frozen
+
+    monkeypatch.setattr(scene_store, "_LAST_TIMESTAMP", None)
+    monkeypatch.setattr(scene_store, "datetime", _FrozenClock)
+
+    store = CAD3DSceneStore(persist_dir=tmp_path)
+    for token in ("tok1", "tok2", "tok3"):
+        store.put_generated_scene(token, token, _scene())
+
+    stamps = [store.get(token).updated_at for token in ("tok1", "tok2", "tok3")]
+    assert len(set(stamps)) == 3, f"timestamps tied under a frozen clock: {stamps}"
+
+    assert [record.token for record in store.list_records()] == ["tok3", "tok2", "tok1"]
+    assert store.get_latest().token == "tok3"
+
+    # The same ordering must survive a reload, so the tiebreak has to live in
+    # the persisted value rather than in insertion order.
+    reloaded = CAD3DSceneStore(persist_dir=tmp_path)
+    assert [record.token for record in reloaded.list_records()] == ["tok3", "tok2", "tok1"]
+    assert reloaded.get_latest().token == "tok3"
 
 
 def test_mark_approved_updates_status_approved_when_result_ok() -> None:

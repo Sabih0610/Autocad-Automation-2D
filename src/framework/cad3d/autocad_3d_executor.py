@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.backup import backup_file
+from src.cad.session import close_document, open_document
 from src.framework.cad3d.scene_schema import validate_cad3d_scene
 from src.framework.cad3d.routing import (
     CAD3DRoutingError,
@@ -641,103 +642,121 @@ def execute_cad3d_scene(
 
     acad = _get_acad()
 
+    opened_here = False
     if target_dwg_path:
-        doc = _com_retry(
-            lambda: acad.Documents.Open(str(target_dwg_path)),
+        # Via session.open_document rather than Documents.Open directly, for
+        # the is_file check, the already-open lookup and the FullName identity
+        # check — and so we know whether to close the document again.
+        doc, opened_here = _com_retry(
+            lambda: open_document(acad, str(target_dwg_path)),
             f"opening DWG {target_dwg_path}",
         )
     else:
         doc = _active_document(acad)
 
-    document_name = _safe_get_document_name(doc)
-    dwg_path = _document_path(doc, target_dwg_path)
-    backup_path = None
-    backup_skipped_reason = None
-    if save:
-        if dwg_path and Path(dwg_path).is_file():
-            backup_path = str(backup_file(Path(dwg_path)))
-        elif not dwg_path:
-            backup_skipped_reason = (
-                "Backup skipped because the active document is unsaved/untitled "
-                "and has no file path."
-            )
-        else:
-            backup_skipped_reason = (
-                f"Backup skipped because the drawing path is not an existing file: {dwg_path}"
-            )
-
-    # An untitled document has no prior on-disk drawing to protect. It is safe
-    # to permit Save after successful execution even though no backup can exist.
-    # Presentation layers are best-effort. They should never block geometry.
-    presentation_layers_created = False
-    presentation_layer_error = None
     try:
-        _ensure_cad3d_presentation_layers(doc)
-        presentation_layers_created = True
-    except Exception as exc:
-        presentation_layer_error = f"{type(exc).__name__}: {exc}"
-
-    msp = _com_retry(lambda: doc.ModelSpace, "getting model space")
-    entity_count_before = _safe_modelspace_count(msp)
-
-    executed_count = 0
-    errors: list[dict[str, Any]] = []
-    components = expanded_scene["components"]
-
-    for index, component in enumerate(components):
-        try:
-            created_entities = _execute_component_3d(doc, component)
-            if created_entities <= 0:
-                raise AutoCAD3DExecutionError(
-                    f"No entities were created for component {component.get('id')}"
+        document_name = _safe_get_document_name(doc)
+        dwg_path = _document_path(doc, target_dwg_path)
+        backup_path = None
+        backup_skipped_reason = None
+        if save:
+            if dwg_path and Path(dwg_path).is_file():
+                backup_path = str(backup_file(Path(dwg_path)))
+            elif not dwg_path:
+                backup_skipped_reason = (
+                    "Backup skipped because the active document is unsaved/untitled "
+                    "and has no file path."
                 )
-            executed_count += 1
-        except Exception as exc:
-            errors.append(
-                {
-                    "component_index": index,
-                    "component_id": component.get("id"),
-                    "component_type": component.get("component_type"),
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
+            else:
+                backup_skipped_reason = (
+                    f"Backup skipped because the drawing path is not an existing file: {dwg_path}"
+                )
 
-    if save and not errors:
+        # An untitled document has no prior on-disk drawing to protect. It is safe
+        # to permit Save after successful execution even though no backup can exist.
+        # Presentation layers are best-effort. They should never block geometry.
+        presentation_layers_created = False
+        presentation_layer_error = None
         try:
-            _com_retry(lambda: doc.Save(), "saving document")
+            _ensure_cad3d_presentation_layers(doc)
+            presentation_layers_created = True
         except Exception as exc:
-            errors.append(
-                {
-                    "component_index": None,
-                    "component_id": None,
-                    "component_type": "SAVE",
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
+            presentation_layer_error = f"{type(exc).__name__}: {exc}"
 
-    entity_count_after = _safe_modelspace_count(msp)
-    zoom_extents_called = False
-    zoom_error = None
+        msp = _com_retry(lambda: doc.ModelSpace, "getting model space")
+        entity_count_before = _safe_modelspace_count(msp)
 
-    if zoom_extents:
-        zoom_extents_called, zoom_error = _activate_regen_zoom(acad, doc)
+        executed_count = 0
+        errors: list[dict[str, Any]] = []
+        components = expanded_scene["components"]
 
-    return {
-        "ok": not errors,
-        "executed_count": executed_count,
-        "total_count": len(components),
-        "pipe_connections_expanded": pipe_connections_expanded,
-        "executable_component_count": len(components),
-        "original_component_count": original_component_count,
-        "errors": errors,
-        "dwg_path": dwg_path,
-        "document_name": document_name,
-        "entity_count_before": entity_count_before,
-        "entity_count_after": entity_count_after,
-        "zoom_extents_called": zoom_extents_called,
-        "zoom_error": zoom_error,
-        "presentation_layers_created": presentation_layers_created,
-        "presentation_layer_error": presentation_layer_error,
-        "backup_path": backup_path,
-        "backup_skipped_reason": backup_skipped_reason,
-    }
+        for index, component in enumerate(components):
+            try:
+                created_entities = _execute_component_3d(doc, component)
+                if created_entities <= 0:
+                    raise AutoCAD3DExecutionError(
+                        f"No entities were created for component {component.get('id')}"
+                    )
+                executed_count += 1
+            except Exception as exc:
+                errors.append(
+                    {
+                        "component_index": index,
+                        "component_id": component.get("id"),
+                        "component_type": component.get("component_type"),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+
+        if save and not errors:
+            try:
+                _com_retry(lambda: doc.Save(), "saving document")
+            except Exception as exc:
+                errors.append(
+                    {
+                        "component_index": None,
+                        "component_id": None,
+                        "component_type": "SAVE",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+
+        entity_count_after = _safe_modelspace_count(msp)
+        zoom_extents_called = False
+        zoom_error = None
+
+        if zoom_extents:
+            zoom_extents_called, zoom_error = _activate_regen_zoom(acad, doc)
+
+        return {
+            "ok": not errors,
+            "executed_count": executed_count,
+            "total_count": len(components),
+            "pipe_connections_expanded": pipe_connections_expanded,
+            "executable_component_count": len(components),
+            "original_component_count": original_component_count,
+            "errors": errors,
+            "dwg_path": dwg_path,
+            "document_name": document_name,
+            "entity_count_before": entity_count_before,
+            "entity_count_after": entity_count_after,
+            "zoom_extents_called": zoom_extents_called,
+            "zoom_error": zoom_error,
+            "presentation_layers_created": presentation_layers_created,
+            "presentation_layer_error": presentation_layer_error,
+            "backup_path": backup_path,
+            "backup_skipped_reason": backup_skipped_reason,
+        }
+    finally:
+        # Only a document this call opened; one the user already had
+        # open is theirs to keep.
+        if opened_here:
+            _safe_close_document(doc, str(target_dwg_path))
+
+
+def _safe_close_document(doc: Any, target_dwg_path: str) -> None:
+    """Close a document we opened without masking the result we already have."""
+    try:
+        close_document(doc, target_dwg_path)
+    except Exception:
+        pass

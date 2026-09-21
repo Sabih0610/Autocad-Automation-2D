@@ -32,17 +32,47 @@ def mark_open(path, is_open):
                      (canonical_path(path), int(is_open)))
 
 
-def get_document(acad, target_dwg_path):
+def open_document(acad, target_dwg_path):
+    """Resolve a document by path, reporting whether *this call* opened it.
+
+    Returns `(document, opened_here)`. A caller that opens a drawing for the
+    duration of one operation has to close it again — otherwise every request
+    with an explicit target leaves another drawing open in the user's AutoCAD
+    session, accumulating until they notice. But it must never close one the
+    user already had open, and `opened_here` is the only way to tell the two
+    apart after the fact.
+    """
     path = canonical_path(target_dwg_path)
     if not Path(path).is_file():
         raise FileNotFoundError(path)
-    doc = find_open_document(acad, path)
-    if doc is None:
-        doc = acad.Documents.Open(path)
+    existing = find_open_document(acad, path)
+    doc = acad.Documents.Open(path) if existing is None else existing
     if not same_path(doc.FullName, path):
         raise ValueError("AutoCAD returned a different document than the explicit target")
     mark_open(path, True)
+    return doc, existing is None
+
+
+def get_document(acad, target_dwg_path):
+    doc, _opened_here = open_document(acad, target_dwg_path)
     return doc
+
+
+def close_document(doc, target_dwg_path):
+    """Close a document this process opened and clear its open marker.
+
+    The marker has to be cleared even if the close fails, otherwise
+    `rename_file`'s open-file guard refuses to rename the drawing for the rest
+    of the process's life. Never call this for a document the user already had
+    open — see `open_document`.
+    """
+    try:
+        doc.Close(False)
+    finally:
+        try:
+            mark_open(target_dwg_path, False)
+        except Exception:
+            pass
 
 
 @contextmanager

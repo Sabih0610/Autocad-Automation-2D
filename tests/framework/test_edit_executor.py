@@ -163,20 +163,19 @@ def _patch_execute_commands(monkeypatch, captured: dict | None = None, result: d
     captured = captured if captured is not None else {}
     captured.setdefault("calls", [])
 
-    def fake_execute_commands(
+    def fake_execute_commands_in_document(
         commands,
-        target_dwg_path=None,
-        save=True,
+        doc,
         continue_on_error=True,
-        zoom_extents=True,
     ):
         captured["calls"].append(
             {
                 "commands": commands,
-                "target_dwg_path": target_dwg_path,
-                "save": save,
+                # The document is now passed explicitly instead of being
+                # re-resolved from ActiveDocument, so record it: tests assert
+                # the additions target the same document as the deletions.
+                "doc": doc,
                 "continue_on_error": continue_on_error,
-                "zoom_extents": zoom_extents,
             }
         )
 
@@ -190,7 +189,9 @@ def _patch_execute_commands(monkeypatch, captured: dict | None = None, result: d
             "errors": [],
         }
 
-    monkeypatch.setattr(edit_executor, "execute_commands", fake_execute_commands)
+    monkeypatch.setattr(
+        edit_executor, "execute_commands_in_document", fake_execute_commands_in_document
+    )
     return captured
 
 
@@ -220,7 +221,15 @@ def test_delete_only_edit_calls_handle_to_object_and_delete(fake_doc, monkeypatc
     assert result["delete_count"] == 1
 
 
-def test_add_only_edit_calls_execute_commands(fake_doc, monkeypatch) -> None:
+def test_add_only_edit_targets_the_document_it_opened(fake_doc, monkeypatch) -> None:
+    """Additions must go to the document `execute_edit_plan` resolved, not to
+    a separately-resolved ActiveDocument.
+
+    This assertion used to read `target_dwg_path is None`, which encoded the
+    bug as correct behaviour: delegating with no target made the additions
+    resolve ActiveDocument independently, so with a different drawing focused
+    the deletions landed in one file and the new geometry in another, and only
+    the first was saved."""
     captured = _patch_execute_commands(monkeypatch)
 
     result = execute_edit_plan(_add_only_plan(), save=False, zoom_extents=False)
@@ -228,16 +237,14 @@ def test_add_only_edit_calls_execute_commands(fake_doc, monkeypatch) -> None:
     assert result["ok"] is True
     assert len(captured["calls"]) == 1
     assert captured["calls"][0]["commands"] == _add_only_plan()["commands"]
-    assert captured["calls"][0]["target_dwg_path"] is None
-    assert captured["calls"][0]["save"] is False
+    assert captured["calls"][0]["doc"] is fake_doc
     assert captured["calls"][0]["continue_on_error"] is True
-    assert captured["calls"][0]["zoom_extents"] is False
     assert result["added_executed_count"] == 1
     assert result["added_total_count"] == 1
 
 
 def test_replace_style_edit_deletes_first_then_adds_commands(fake_doc, monkeypatch) -> None:
-    def fake_execute_commands(*args, **kwargs):
+    def fake_execute_commands_in_document(*args, **kwargs):
         fake_doc.call_log.append("add")
         return {
             "ok": True,
@@ -246,7 +253,9 @@ def test_replace_style_edit_deletes_first_then_adds_commands(fake_doc, monkeypat
             "errors": [],
         }
 
-    monkeypatch.setattr(edit_executor, "execute_commands", fake_execute_commands)
+    monkeypatch.setattr(
+        edit_executor, "execute_commands_in_document", fake_execute_commands_in_document
+    )
 
     result = execute_edit_plan(_replace_plan(), save=False, zoom_extents=False)
 

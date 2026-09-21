@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import threading
 from typing import Any
 
 from src.framework.cad3d.scene_schema import validate_cad3d_scene
@@ -16,8 +17,38 @@ class CAD3DSceneStoreError(Exception):
     """Raised when CAD3D scene state cannot be stored or retrieved."""
 
 
+_TIMESTAMP_LOCK = threading.Lock()
+_LAST_TIMESTAMP: datetime | None = None
+
+
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    """A UTC timestamp that never repeats or goes backwards within a process.
+
+    Records are ordered solely by this string — `list_records`, `get_latest`,
+    `delete` and `_load_all_records_from_disk` all sort or `max` on
+    `updated_at`. `datetime.now()` resolves to roughly 15.6ms on Windows, so
+    two scenes written in the same tick got byte-identical timestamps; since
+    Python's sort is stable, "newest first" then silently returned them
+    oldest-first, and `get_latest()` picked whichever the tie happened to
+    favour. `/api/cad3d/edit` with no token resolves through `get_latest()`,
+    so that tie could edit — and execute into AutoCAD — the wrong scene.
+
+    Forcing each call at least one microsecond past the previous one keeps
+    the string itself a valid sort key, so every call site stays unchanged and
+    persisted records keep ordering correctly after a reload.
+
+    `timespec="microseconds"` is required, not cosmetic: bare `isoformat()`
+    omits the fractional part when it is exactly zero, and "12:00:00Z" sorts
+    *after* "12:00:00.000001Z" because "." < "Z". Fixed-width output is what
+    makes lexicographic order match chronological order.
+    """
+    global _LAST_TIMESTAMP
+    with _TIMESTAMP_LOCK:
+        now = datetime.now(timezone.utc)
+        if _LAST_TIMESTAMP is not None and now <= _LAST_TIMESTAMP:
+            now = _LAST_TIMESTAMP + timedelta(microseconds=1)
+        _LAST_TIMESTAMP = now
+    return now.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _validate_status(status: str) -> str:

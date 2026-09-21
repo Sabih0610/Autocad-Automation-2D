@@ -20,7 +20,6 @@ def managed(tmp_path, monkeypatch):
     handle = make_dxf(path)
     project = register_project("Plant", str(tmp_path))
     scan_project(project, max_workers=1)
-    monkeypatch.setattr(engine, "point", tuple)
     acad = Acad()
     return path, handle, project, ChangeManager(acad=acad), acad
 
@@ -44,7 +43,6 @@ def test_overlapping_project_roots_do_not_block_editing(tmp_path, monkeypatch):
     scan_project(parent_project, max_workers=1)
     scan_project(child_project, max_workers=1)
 
-    monkeypatch.setattr(engine, "point", tuple)
     manager = ChangeManager(acad=Acad())
     change = manager.apply(child_project, [resize(path, handle, delta_mm=50)], "Resize via child project")
     assert change["status"] == "pending"

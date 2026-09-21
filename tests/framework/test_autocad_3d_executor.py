@@ -76,6 +76,7 @@ class FakeDoc:
         self.saved = False
         self.activated = False
         self.regen_count = 0
+        self.closed = False
 
     def Save(self):
         self.saved = True
@@ -86,14 +87,30 @@ class FakeDoc:
     def Regen(self, mode):
         self.regen_count += 1
 
+    def Close(self, save_changes=False):
+        self.closed = True
+
 
 class FakeDocuments:
+    """COM-shaped enough for `session.open_document`, which needs `Count` and
+    `Item` to check whether the drawing is already open before opening it."""
+
     def __init__(self, doc: FakeDoc):
         self.doc = doc
         self.opened_paths = []
+        self.open_docs = []
+
+    @property
+    def Count(self):
+        return len(self.open_docs)
+
+    def Item(self, index):
+        return self.open_docs[index]
 
     def Open(self, path: str):
         self.opened_paths.append(path)
+        self.doc.FullName = str(path)
+        self.open_docs.append(self.doc)
         return self.doc
 
 
@@ -109,6 +126,15 @@ class FakeAcad:
 
 def _patch_acad(monkeypatch, acad: FakeAcad):
     monkeypatch.setattr(executor, "_get_acad", lambda: acad)
+    # `_com_retry` treats any AttributeError as a transient "AutoCAD busy"
+    # signal and sleeps 0.5+1.0+1.5+2.0s before giving up. Against a fake that
+    # is pure wall-clock cost with nothing to wait for, and it dominated the
+    # suite runtime. Retry/backoff itself is covered by its own tests.
+    monkeypatch.setattr(
+        executor,
+        "_com_retry",
+        lambda operation, description, attempts=5, delay_seconds=0.5: operation(),
+    )
     return acad
 
 
@@ -488,7 +514,13 @@ def test_component_failure_records_error_and_returns_not_ok(monkeypatch) -> None
     assert result["executed_count"] >= 1
 
 
-def test_target_dwg_path_opens_document(monkeypatch) -> None:
+def test_target_dwg_path_opens_document(monkeypatch, tmp_path) -> None:
+    """Uses a real file because documents now resolve through
+    `session.open_document`, which refuses a path that is not an existing
+    file — one of the checks the previous direct `Documents.Open` call
+    skipped."""
+    target = tmp_path / "test.dwg"
+    target.write_bytes(b"")
     acad = _patch_acad(monkeypatch, FakeAcad())
     scene = deepcopy(simple_3d_equipment_layout_scene())
     scene["components"] = [
@@ -501,7 +533,9 @@ def test_target_dwg_path_opens_document(monkeypatch) -> None:
         }
     ]
 
-    result = execute_cad3d_scene(scene, target_dwg_path="C:/Temp/test.dwg", zoom_extents=False)
+    result = execute_cad3d_scene(scene, target_dwg_path=str(target), zoom_extents=False)
 
-    assert acad.Documents.opened_paths == ["C:/Temp/test.dwg"]
-    assert result["dwg_path"] == str(Path("C:/Temp/test.dwg"))
+    assert acad.Documents.opened_paths == [str(target)]
+    assert result["dwg_path"] == str(target)
+    # A document this call opened must not be left open in the user's session.
+    assert acad.Documents.doc.closed is True

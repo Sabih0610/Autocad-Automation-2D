@@ -137,7 +137,7 @@ def test_edit_delete_success_add_failure_is_not_saved(tmp_path, monkeypatch) -> 
     monkeypatch.setattr(edit_executor, "_get_acad", lambda: acad)
     monkeypatch.setattr(
         edit_executor,
-        "execute_commands",
+        "execute_commands_in_document",
         lambda *args, **kwargs: {
             "ok": False,
             "executed_count": 0,

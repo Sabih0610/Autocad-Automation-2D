@@ -128,6 +128,13 @@ def test_generated_pid_pipe_carries_recoverable_tag(tmp_path, monkeypatch):
     path = tmp_path / "pid_001.dxf"
     doc = _CreatingDocument(path)
     monkeypatch.setattr(executor, "_get_acad", lambda: _CreatingAcad(doc))
+    # See the note in tests/framework/test_autocad_3d_executor.py: against a
+    # fake, _com_retry's 5s backoff is pure wall-clock cost.
+    monkeypatch.setattr(
+        executor,
+        "_com_retry",
+        lambda operation, description, attempts=5, delay_seconds=0.5: operation(),
+    )
 
     pipe = PipeRunComponent(id="pipe1", tag="P-101", points=[[0, 0], [1000, 0]])
     valve = GateValveComponent(id="valve1", tag="V-201", center=[500, 0])
@@ -155,6 +162,13 @@ def test_generated_pid_pipe_is_findable_by_tag(tmp_path, monkeypatch):
     path = tmp_path / "pid_002.dxf"
     doc = _CreatingDocument(path)
     monkeypatch.setattr(executor, "_get_acad", lambda: _CreatingAcad(doc))
+    # See the note in tests/framework/test_autocad_3d_executor.py: against a
+    # fake, _com_retry's 5s backoff is pure wall-clock cost.
+    monkeypatch.setattr(
+        executor,
+        "_com_retry",
+        lambda operation, description, attempts=5, delay_seconds=0.5: operation(),
+    )
 
     pipe = PipeRunComponent(id="pipe1", tag="P-101", points=[[0, 0], [1000, 0]])
     execute_commands(pipe.render(), save=True, zoom_extents=False)
@@ -188,6 +202,13 @@ def test_generated_pid_pipe_resize_is_a_documented_follow_up_gap(tmp_path, monke
     path = tmp_path / "pid_003.dxf"
     doc = _CreatingDocument(path)
     monkeypatch.setattr(executor, "_get_acad", lambda: _CreatingAcad(doc))
+    # See the note in tests/framework/test_autocad_3d_executor.py: against a
+    # fake, _com_retry's 5s backoff is pure wall-clock cost.
+    monkeypatch.setattr(
+        executor,
+        "_com_retry",
+        lambda operation, description, attempts=5, delay_seconds=0.5: operation(),
+    )
 
     pipe = PipeRunComponent(id="pipe1", tag="P-101", points=[[0, 0], [1000, 0]])
     execute_commands(pipe.render(), save=True, zoom_extents=False)
@@ -196,7 +217,6 @@ def test_generated_pid_pipe_resize_is_a_documented_follow_up_gap(tmp_path, monke
     scan_project(project, max_workers=1)
     handle = find_by_tag(project, "P-101")[0]["handle"]
 
-    monkeypatch.setattr(engine, "point", tuple)
     edit_acad = EditingAcad([])
     operation = dict(
         command="RESIZE_COMPONENT",

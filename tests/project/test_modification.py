@@ -21,7 +21,6 @@ def drawing(tmp_path, monkeypatch):
     handle = make_dxf(path)
     project = register_project("Plant", str(tmp_path))
     scan_project(project, max_workers=1)
-    monkeypatch.setattr(engine, "point", tuple)
     return path, handle, project
 
 

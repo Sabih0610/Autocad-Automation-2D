@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.backup import backup_file
-from src.cad.session import serialized
+from src.cad.session import close_document, open_document, serialized
 from src.parametric.vessel.dwg_export import (
     AutoCADNotRunningError,
     _com_retry,
@@ -466,50 +466,28 @@ def _activate_regen_zoom(acad, doc) -> tuple[bool, str | None]:
     return True, None
 
 
-@serialized
-def execute_commands(
+def _safe_close_document(doc: Any, target_dwg_path: str) -> None:
+    """Close a document we opened, without letting that failure mask a result.
+
+    A close failure is housekeeping: the commands have already run and the
+    save has already happened, so raising here would turn a successful edit
+    into a reported failure.
+    """
+    try:
+        close_document(doc, target_dwg_path)
+    except Exception:
+        pass
+
+
+def _run_commands(
     commands: list[dict],
-    target_dwg_path: str | None = None,
-    save: bool = True,
-    continue_on_error: bool = True,
-    zoom_extents: bool = True,
-) -> dict:
-    """Execute structured command dictionaries through AutoCAD COM."""
-    if not isinstance(commands, list) or not commands:
-        raise CommandExecutionError("commands must be a non-empty list")
-
-    acad = _get_acad()
-
-    if target_dwg_path:
-        doc = _com_retry(
-            lambda: acad.Documents.Open(str(target_dwg_path)),
-            f"opening DWG {target_dwg_path}",
-        )
-    else:
-        doc = _active_document(acad)
-
-    msp = _com_retry(lambda: doc.ModelSpace, "getting model space")
-    layers = _com_retry(lambda: doc.Layers, "getting layers")
-    known_layers: set[str] = set()
-    document_name = _safe_get_document_name(doc)
-    dwg_path = _document_path(doc, target_dwg_path)
-    entity_count_before = _safe_modelspace_count(msp)
-
-    backup_path = None
-    backup_skipped_reason = None
-    if save:
-        if dwg_path and Path(dwg_path).is_file():
-            backup_path = str(backup_file(Path(dwg_path)))
-        elif not dwg_path:
-            backup_skipped_reason = (
-                "Backup skipped because the active document is unsaved/untitled "
-                "and has no file path."
-            )
-        else:
-            backup_skipped_reason = (
-                f"Backup skipped because the drawing path is not an existing file: {dwg_path}"
-            )
-
+    doc: Any,
+    msp: Any,
+    layers: Any,
+    known_layers: set[str],
+    continue_on_error: bool,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Execute a command list against an already-resolved document."""
     executed_count = 0
     errors: list[dict[str, Any]] = []
 
@@ -529,39 +507,130 @@ def execute_commands(
             if not continue_on_error:
                 break
 
-    if save and not errors:
-        try:
-            _com_retry(lambda: doc.Save(), "saving document")
-        except Exception as exc:
-            errors.append(
-                {
-                    "command_index": None,
-                    "command": "SAVE",
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
+    return executed_count, errors
 
-    entity_count_after = _safe_modelspace_count(msp)
-    zoom_extents_called = False
-    zoom_error = None
 
-    if zoom_extents:
-        zoom_extents_called, zoom_error = _activate_regen_zoom(acad, doc)
+def execute_commands_in_document(
+    commands: list[dict],
+    doc: Any,
+    continue_on_error: bool = True,
+) -> dict:
+    """Run commands against a document the caller has already resolved.
 
+    `execute_commands` resolves its own document, from a path or from
+    `ActiveDocument`. A caller that has *already* opened the drawing it means
+    to write to must not go through that: `edit_executor` did, which made its
+    additions resolve `ActiveDocument` independently and land in whatever
+    drawing happened to be focused, while its deletions went to the intended
+    target — splitting one edit across two files and saving only one of them.
+
+    Saving, backup and zoom are deliberately the caller's responsibility here,
+    since the caller owns the document's lifecycle.
+    """
+    msp = _com_retry(lambda: doc.ModelSpace, "getting model space")
+    layers = _com_retry(lambda: doc.Layers, "getting layers")
+    executed_count, errors = _run_commands(
+        commands, doc, msp, layers, set(), continue_on_error
+    )
     return {
         "ok": not errors,
         "executed_count": executed_count,
         "total_count": len(commands),
         "errors": errors,
-        "dwg_path": dwg_path,
-        "document_name": document_name,
-        "entity_count_before": entity_count_before,
-        "entity_count_after": entity_count_after,
-        "zoom_extents_called": zoom_extents_called,
-        "zoom_error": zoom_error,
-        "backup_path": backup_path,
-        "backup_skipped_reason": backup_skipped_reason,
     }
+
+
+@serialized
+def execute_commands(
+    commands: list[dict],
+    target_dwg_path: str | None = None,
+    save: bool = True,
+    continue_on_error: bool = True,
+    zoom_extents: bool = True,
+) -> dict:
+    """Execute structured command dictionaries through AutoCAD COM."""
+    if not isinstance(commands, list) or not commands:
+        raise CommandExecutionError("commands must be a non-empty list")
+
+    acad = _get_acad()
+
+    opened_here = False
+    if target_dwg_path:
+        # Via session.open_document rather than Documents.Open directly: that
+        # gives the is_file check, the already-open lookup and the FullName
+        # identity check, and tells us whether to close the document again.
+        doc, opened_here = _com_retry(
+            lambda: open_document(acad, str(target_dwg_path)),
+            f"opening DWG {target_dwg_path}",
+        )
+    else:
+        doc = _active_document(acad)
+
+    try:
+        msp = _com_retry(lambda: doc.ModelSpace, "getting model space")
+        layers = _com_retry(lambda: doc.Layers, "getting layers")
+        known_layers: set[str] = set()
+        document_name = _safe_get_document_name(doc)
+        dwg_path = _document_path(doc, target_dwg_path)
+        entity_count_before = _safe_modelspace_count(msp)
+
+        backup_path = None
+        backup_skipped_reason = None
+        if save:
+            if dwg_path and Path(dwg_path).is_file():
+                backup_path = str(backup_file(Path(dwg_path)))
+            elif not dwg_path:
+                backup_skipped_reason = (
+                    "Backup skipped because the active document is unsaved/untitled "
+                    "and has no file path."
+                )
+            else:
+                backup_skipped_reason = (
+                    f"Backup skipped because the drawing path is not an existing file: {dwg_path}"
+                )
+
+        executed_count, errors = _run_commands(
+            commands, doc, msp, layers, known_layers, continue_on_error
+        )
+
+        if save and not errors:
+            try:
+                _com_retry(lambda: doc.Save(), "saving document")
+            except Exception as exc:
+                errors.append(
+                    {
+                        "command_index": None,
+                        "command": "SAVE",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+
+        entity_count_after = _safe_modelspace_count(msp)
+        zoom_extents_called = False
+        zoom_error = None
+
+        if zoom_extents:
+            zoom_extents_called, zoom_error = _activate_regen_zoom(acad, doc)
+
+        return {
+            "ok": not errors,
+            "executed_count": executed_count,
+            "total_count": len(commands),
+            "errors": errors,
+            "dwg_path": dwg_path,
+            "document_name": document_name,
+            "entity_count_before": entity_count_before,
+            "entity_count_after": entity_count_after,
+            "zoom_extents_called": zoom_extents_called,
+            "zoom_error": zoom_error,
+            "backup_path": backup_path,
+            "backup_skipped_reason": backup_skipped_reason,
+        }
+    finally:
+        # Only a document this call opened. One the user already had open is
+        # theirs to keep. Runs after the save, and on the failure path too.
+        if opened_here:
+            _safe_close_document(doc, str(target_dwg_path))
 
 
 def execute_command_sequence(

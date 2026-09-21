@@ -41,7 +41,6 @@ def test_ten_drawings_plan_three_items_with_one_small_ai_prompt(tmp_path, monkey
         return {"command": "RESIZE_COMPONENT", "dimension": "length", "delta_mm": 50}
 
     monkeypatch.setattr(project_planner, "ask_ai", fake_ask_ai)
-    monkeypatch.setattr(engine, "point", tuple)
     acad = Acad()
     manager = ChangeManager(acad=acad)
     writer_threads = []
@@ -195,7 +194,6 @@ def test_project_http_plan_execute_and_keep(tmp_path, monkeypatch):
     scan_project(project_id, max_workers=1)
     monkeypatch.setattr(project_planner, "ask_ai", lambda **kwargs: {
         "command": "RESIZE_COMPONENT", "dimension": "length", "delta_mm": 50})
-    monkeypatch.setattr(engine, "point", tuple)
     manager = ChangeManager(acad=Acad())
     orchestrator = ProjectOrchestrator(manager=manager)
     monkeypatch.setattr(project_routes, "orchestrator", lambda: orchestrator)
