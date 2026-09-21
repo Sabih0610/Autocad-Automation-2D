@@ -128,18 +128,25 @@ def pid_standard_layers() -> list[dict]:
 def pipe_line_commands(
     points: list[list[float]],
     layer: str = PID_LAYER_PIPING,
+    tag: str | None = None,
 ) -> list[dict]:
     if not isinstance(points, list) or len(points) < 2:
         raise ValueError("points must contain at least two coordinate pairs")
 
-    return [
-        {
-            "command": "POLYLINE",
-            "points": [[float(x), float(y)] for x, y in (_xy(point) for point in points)],
-            "closed": False,
-            "layer": layer,
-        }
-    ]
+    command = {
+        "command": "POLYLINE",
+        "points": [[float(x), float(y)] for x, y in (_xy(point) for point in points)],
+        "closed": False,
+        "layer": layer,
+    }
+    # Attach the pipe's engineering tag (e.g. "P-101") as recoverable identity on
+    # the polyline itself (see executor.py's `_apply_entity_tag`). Without this,
+    # a generated pipe is geometry with no tag anywhere the project index can
+    # read back, so it can never be found again for a resize/edit request.
+    if tag:
+        command["tag"] = tag
+
+    return [command]
 
 
 def horizontal_vessel_commands(
@@ -172,10 +179,15 @@ def horizontal_vessel_commands(
 
     return [
         {
+            # The top shell LINE is this vessel's identity-bearing entity (see
+            # executor.py's `_apply_entity_tag`) — it's also what RESIZE_COMPONENT
+            # "length" edits target, so tagging it doubles as making the vessel
+            # both findable and resizable by tag.
             "command": "LINE",
             "from": [left_x, top_y],
             "to": [right_x, top_y],
             "layer": layer,
+            "tag": tag,
         },
         {
             "command": "LINE",
@@ -239,10 +251,14 @@ def vertical_vessel_commands(
 
     return [
         {
+            # See the matching comment in horizontal_vessel_commands: this LINE
+            # is the vessel's identity-bearing entity and its RESIZE_COMPONENT
+            # "length" target.
             "command": "LINE",
             "from": [left_x, bottom_y],
             "to": [left_x, top_y],
             "layer": layer,
+            "tag": tag,
         },
         {
             "command": "LINE",
@@ -281,6 +297,7 @@ def gate_valve_commands(
     size: float = PID_VALVE_SIZE,
     orientation: str = "H",
     layer: str = PID_LAYER_VALVES,
+    tag: str | None = None,
 ) -> list[dict]:
     _validate_positive(size, "size")
     orientation = _validate_orientation(orientation)
@@ -293,17 +310,23 @@ def gate_valve_commands(
     handle = half * 0.42
 
     if orientation == "H":
+        first_wedge = {
+            "command": "POLYLINE",
+            "points": [
+                [cx - body_half, cy - body_width],
+                [cx, cy],
+                [cx - body_half, cy + body_width],
+            ],
+            "closed": True,
+            "layer": layer,
+        }
+        # The first body wedge is this valve's identity-bearing entity — see
+        # executor.py's `_apply_entity_tag`.
+        if tag:
+            first_wedge["tag"] = tag
+
         return [
-            {
-                "command": "POLYLINE",
-                "points": [
-                    [cx - body_half, cy - body_width],
-                    [cx, cy],
-                    [cx - body_half, cy + body_width],
-                ],
-                "closed": True,
-                "layer": layer,
-            },
+            first_wedge,
             {
                 "command": "POLYLINE",
                 "points": [
@@ -340,17 +363,21 @@ def gate_valve_commands(
             },
         ]
 
+    first_wedge = {
+        "command": "POLYLINE",
+        "points": [
+            [cx - body_width, cy - body_half],
+            [cx, cy],
+            [cx + body_width, cy - body_half],
+        ],
+        "closed": True,
+        "layer": layer,
+    }
+    if tag:
+        first_wedge["tag"] = tag
+
     return [
-        {
-            "command": "POLYLINE",
-            "points": [
-                [cx - body_width, cy - body_half],
-                [cx, cy],
-                [cx + body_width, cy - body_half],
-            ],
-            "closed": True,
-            "layer": layer,
-        },
+        first_wedge,
         {
             "command": "POLYLINE",
             "points": [
@@ -393,13 +420,14 @@ def control_valve_commands(
     size: float = 140,
     orientation: str = "H",
     layer: str = PID_LAYER_VALVES,
+    tag: str | None = None,
 ) -> list[dict]:
     _validate_positive(size, "size")
     orientation = _validate_orientation(orientation)
     cx, cy = _xy(center)
     actuator_radius = float(size) * 0.22
     offset = float(size) * 0.88
-    commands = gate_valve_commands(center, size=size, orientation=orientation, layer=layer)
+    commands = gate_valve_commands(center, size=size, orientation=orientation, layer=layer, tag=tag)
 
     if orientation == "H":
         actuator_center = [cx, cy + offset]
@@ -440,10 +468,15 @@ def instrument_bubble_commands(
     text_width = _estimated_text_width(tag, text_height)
     return [
         {
+            # The bubble CIRCLE is this instrument's identity-bearing entity —
+            # see executor.py's `_apply_entity_tag`. `tag` is required (validated
+            # above), so it's always attached here, unlike the optional-tag
+            # symbol functions elsewhere in this module.
             "command": "CIRCLE",
             "center": [cx, cy],
             "radius": float(radius),
             "layer": layer,
+            "tag": tag,
         },
         {
             "command": "LINE",

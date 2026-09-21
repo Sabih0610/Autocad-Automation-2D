@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from functools import wraps
 import inspect
@@ -32,7 +33,12 @@ MAX_AUDIT_BYTES = 100 * 1024
 AUDIT_ROUTE_MAP = {
     "/api/projects": "project_register",
     "/api/projects/{project_id}/scan": "project_scan",
+    "/api/projects/{project_id}/drawings": "project_drawings",
+    "/api/projects/{project_id}/entities": "project_entities",
+    "/api/projects/{project_id}/nearby": "project_nearby",
+    "/api/projects/{project_id}/change-sets": "project_change_sets",
     "/api/projects/{project_id}/plan": "project_plan",
+    "/api/projects/jobs/{job_id}": "project_job",
     "/api/projects/jobs/{job_id}/execute": "project_execute",
     "/api/change-sets": "project_apply",
     "/api/change-sets/{change_id}/keep": "changeset_keep",
@@ -57,9 +63,26 @@ CURRENT_AUDIT_JOB_ID: ContextVar[str | None] = ContextVar("current_audit_job_id"
 CURRENT_AUDIT_COMPLETED: ContextVar[bool] = ContextVar("current_audit_completed", default=False)
 
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # A multi-file project job stranded at status="running" by a previous
+    # process crash (not a caught exception — those already mark it
+    # "error") can never be claimed again by `execute()`, since claiming
+    # only matches status="pending". This process is only just starting, so
+    # any "running" row found here cannot belong to a worker thread that's
+    # still actually alive right now — see
+    # `src.cad.orchestrator.reconcile_interrupted_jobs` for why marking
+    # rather than blindly resuming is the safe choice.
+    from src.cad.orchestrator import reconcile_interrupted_jobs
+
+    reconcile_interrupted_jobs()
+    yield
+
+
 app = FastAPI(
     title="AutoCAD AI Automation",
     description="Thin FastAPI wrapper over the existing AutoCAD AI use case modules.",
+    lifespan=_lifespan,
 )
 
 app.include_router(title_block_router)
@@ -111,6 +134,18 @@ def _extract_ai_output(payload: Any) -> dict[str, Any] | None:
 
 def _status_from_result(payload: Any) -> str:
     if isinstance(payload, dict) and payload.get("ok") is False:
+        return "error"
+    # The project/changeset routes (src/api/routes/projects.py,
+    # src/api/routes/changes.py) return the underlying jobs_multi_file/
+    # change_sets database row directly, which reports failure via a
+    # `"status": "error"` field, not an `"ok": False` field like every other
+    # route's response shape — without this, a genuinely failed multi-file
+    # job or changeset execution was silently audit-logged as `status="ok"`.
+    # "error" is the one literal value both of those tables use to mean
+    # failure; other status values (pending/running/done/applying/kept/
+    # reverted/active/scanned/etc.) are all non-error states and must not be
+    # misread as failures here.
+    if isinstance(payload, dict) and payload.get("status") == "error":
         return "error"
     return "ok"
 

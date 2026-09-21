@@ -282,6 +282,23 @@ def test_pid_approve_response_includes_execution_result(client, monkeypatch) -> 
     assert data["title"] == "AI Planned P&ID"
 
 
+def test_pid_approve_token_is_consumed_on_success_and_cannot_replay(client, monkeypatch) -> None:
+    """`_PID_CACHE` never expires entries on its own — before this fix, the
+    same token could be approved (re-executed into AutoCAD) an unlimited
+    number of times. A successful approve must consume its token."""
+    response, captured = _generate(client, monkeypatch)
+    token = response.json()["token"]
+    _patch_executor(monkeypatch, captured)
+
+    first = client.post("/api/pid/approve", json={"token": token})
+    assert first.status_code == 200
+    assert len(captured["execute_calls"]) == 1
+
+    replay = client.post("/api/pid/approve", json={"token": token})
+    assert replay.status_code == 404
+    assert len(captured["execute_calls"]) == 1  # not executed a second time
+
+
 def test_pid_approve_missing_token_returns_404(client, monkeypatch) -> None:
     _patch_executor(monkeypatch)
 

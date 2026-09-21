@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 
+from src.cad.locks import CAD_LOCK
 from src.framework.commands import executor
 from src.framework.commands.executor import (
     CommandExecutionError,
@@ -11,6 +14,19 @@ from src.framework.commands.executor import (
 from src.framework.commands.schema import COMMAND_SCHEMA_VERSION
 
 
+def _unwrap_com_array(value):
+    """Unwrap a `win32com.client.VARIANT` (or plain list/tuple) into a tuple.
+
+    `pywin32`'s `VARIANT` is not itself iterable — `list(variant)` raises
+    `TypeError: 'VARIANT' object is not iterable`. The real underlying data is
+    on `.value`. Since `pywin32` is genuinely installed in this environment,
+    `executor.py`'s `_apply_entity_tag` constructs real `VARIANT` arguments
+    even against these fakes, so the fakes must unwrap them the same way real
+    AutoCAD's COM marshaling would.
+    """
+    return tuple(value.value if hasattr(value, "value") else value)
+
+
 class FakeEntity:
     def __init__(self, kind: str):
         self.kind = kind
@@ -18,6 +34,10 @@ class FakeEntity:
         self.Closed = False
         self.Rotation = None
         self.TextOverride = None
+        self.xdata_calls: list[tuple[tuple, tuple]] = []
+
+    def SetXData(self, data_types, data_values):
+        self.xdata_calls.append((_unwrap_com_array(data_types), _unwrap_com_array(data_values)))
 
 
 class FakeLayer:
@@ -83,10 +103,19 @@ class FakeModelSpace:
         return entity
 
 
+class FakeRegApps:
+    def __init__(self):
+        self.added = []
+
+    def Add(self, name: str):
+        self.added.append(name)
+
+
 class FakeDocument:
     def __init__(self):
         self.ModelSpace = FakeModelSpace()
         self.Layers = FakeLayers()
+        self.RegApps = FakeRegApps()
         self.Name = "active.dwg"
         self.FullName = r"C:\fake\active.dwg"
         self.saved = False
@@ -170,6 +199,36 @@ def test_line_calls_fake_modelspace_addline(fake_doc) -> None:
 
     assert result["ok"] is True
     assert len(fake_doc.ModelSpace.lines) == 1
+
+
+def test_line_with_tag_writes_recoverable_xdata(fake_doc) -> None:
+    """A command carrying an optional "tag" must be written as XData the
+    project extractor can read back (`TAG=<value>`, under
+    `executor.TAG_XDATA_APPID`) — see `_apply_entity_tag`. Without this, a
+    generated component has no recoverable identity once drawn; this was the
+    root cause of generated P&ID pipes being permanently unfindable/
+    un-resizable by tag."""
+    result = execute_commands(
+        [{"command": "LINE", "from": [0, 0], "to": [100, 0], "tag": "P-101"}],
+        save=False,
+    )
+
+    assert result["ok"] is True
+    _, _, entity = fake_doc.ModelSpace.lines[0]
+    assert entity.xdata_calls == [
+        ((1001, 1000), (executor.TAG_XDATA_APPID, "TAG=P-101")),
+    ]
+    assert executor.TAG_XDATA_APPID in fake_doc.RegApps.added
+
+
+def test_command_without_tag_writes_no_xdata(fake_doc) -> None:
+    execute_commands(
+        [{"command": "LINE", "from": [0, 0], "to": [100, 0]}],
+        save=False,
+    )
+
+    _, _, entity = fake_doc.ModelSpace.lines[0]
+    assert entity.xdata_calls == []
 
 
 def test_circle_calls_fake_modelspace_addcircle(fake_doc) -> None:
@@ -356,3 +415,44 @@ def test_zoom_error_is_populated_when_zoom_fails(fake_doc) -> None:
     )
 
     assert result["zoom_error"] == "RuntimeError: zoom failed"
+
+
+def test_execute_commands_holds_cad_lock_for_its_whole_duration(fake_doc, monkeypatch) -> None:
+    """`execute_commands` (the legacy path behind `/api/sketch/approve`,
+    `/api/pid/approve`, and `/api/autocad/edit` via `execute_edit_plan`)
+    previously acquired no lock at all — only the newer project/changeset
+    write path (`modification_executor.py`, `changes.py`) participated in
+    `CAD_LOCK`. That meant a legacy approval write and a new project write
+    could interleave their COM calls against the same live AutoCAD session.
+    This proves the lock is genuinely held for the whole call, not just
+    referenced somewhere, by having a second thread attempt a non-blocking
+    acquire while `execute_commands` is paused mid-execution."""
+    started = threading.Event()
+    release = threading.Event()
+    original_execute_one = executor._execute_one_command
+
+    def blocking_execute_one(*args, **kwargs):
+        started.set()
+        assert release.wait(timeout=5), "test setup failed: never released"
+        return original_execute_one(*args, **kwargs)
+
+    monkeypatch.setattr(executor, "_execute_one_command", blocking_execute_one)
+
+    thread = threading.Thread(
+        target=execute_commands,
+        args=([{"command": "LINE", "from": [0, 0], "to": [100, 0]}],),
+        kwargs=dict(save=False),
+    )
+    thread.start()
+    try:
+        assert started.wait(timeout=5), "execute_commands never started"
+        # A different thread trying to acquire CAD_LOCK while
+        # execute_commands is mid-flight must fail immediately.
+        assert CAD_LOCK.acquire(blocking=False) is False
+    finally:
+        release.set()
+        thread.join(timeout=5)
+
+    # Once execute_commands has returned, the lock must be free again.
+    assert CAD_LOCK.acquire(blocking=False) is True
+    CAD_LOCK.release()

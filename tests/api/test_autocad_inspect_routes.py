@@ -111,6 +111,29 @@ def test_max_entities_is_passed_to_inspector(client, monkeypatch) -> None:
     assert captured["max_entities"] == [123]
 
 
+def test_empty_target_dwg_path_is_not_silently_dropped(client, monkeypatch) -> None:
+    """An explicitly-sent empty `target_dwg_path` must still reach the
+    inspector (and be rejected there with a clear error) rather than being
+    silently treated the same as "no target given" and falling back to
+    whatever's currently active in AutoCAD."""
+    captured: dict = {}
+
+    def fake_inspect(max_entities=500, **kwargs):
+        captured.update(kwargs)
+        if kwargs.get("target_dwg_path") == "":
+            raise ValueError("An explicit absolute drawing path is required")
+        return FAKE_INSPECTION
+
+    monkeypatch.setattr(inspect_routes, "inspect_active_drawing", fake_inspect)
+    monkeypatch.setattr(inspect_routes, "summarize_drawing_state", lambda inspection: "")
+
+    response = client.get("/api/autocad/inspect?target_dwg_path=")
+
+    assert captured.get("target_dwg_path") == ""
+    assert response.status_code == 500
+    assert "absolute drawing path is required" in response.json()["detail"]
+
+
 def test_invalid_max_entities_zero_returns_validation_error(client, monkeypatch) -> None:
     _patch_inspector(monkeypatch)
 

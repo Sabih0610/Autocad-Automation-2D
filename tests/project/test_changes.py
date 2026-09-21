@@ -25,6 +25,32 @@ def managed(tmp_path, monkeypatch):
     return path, handle, project, ChangeManager(acad=acad), acad
 
 
+def test_overlapping_project_roots_do_not_block_editing(tmp_path, monkeypatch):
+    """Registering a parent folder and one of its own subfolders as two
+    separate projects, then scanning both, previously broke every edit
+    inside the overlapping subfolder: the same physical file gets indexed
+    under two different `drawing_id`s (one per project), so a path+handle
+    lookup with no project scope always matched both rows and refused to
+    edit, reporting "not uniquely indexed" even though the caller
+    unambiguously selected one specific project."""
+    parent_root = tmp_path / "plant"
+    child_root = parent_root / "unit_a"
+    child_root.mkdir(parents=True)
+    path = child_root / "a.dxf"
+    handle = make_dxf(path)
+
+    parent_project = register_project("Plant", str(parent_root))
+    child_project = register_project("Unit A", str(child_root))
+    scan_project(parent_project, max_workers=1)
+    scan_project(child_project, max_workers=1)
+
+    monkeypatch.setattr(engine, "point", tuple)
+    manager = ChangeManager(acad=Acad())
+    change = manager.apply(child_project, [resize(path, handle, delta_mm=50)], "Resize via child project")
+    assert change["status"] == "pending"
+    assert change["validation"][0]["passed"] == 1
+
+
 def test_backup_names_do_not_collide_for_same_named_drawings(tmp_path):
     paths = []
     for folder in ("one", "two"):
@@ -167,6 +193,23 @@ def test_partial_failure_can_revert_every_file(managed, tmp_path):
     assert all(p.read_bytes() == data for p, data in originals.items())
 
 
+def test_rename_with_forward_slash_path_does_not_crash(managed):
+    """A rename operation whose `target_dwg_path` uses forward slashes (as
+    `Path.as_posix()` would produce, or any caller that doesn't happen to
+    use the native OS separator) previously wasn't recognized as matching
+    its own entry in `targets` (whose keys are canonicalized), so the
+    "already covered by a rename" check treated it as a normal COM-needing
+    operation with no session available — crashing with
+    "'NoneType' object has no attribute 'Documents'" instead of renaming
+    the file."""
+    path, handle, project, manager, _ = managed
+    posix_path = path.as_posix()
+    change = manager.apply(project, [dict(command="RENAME_FILE", target_dwg_path=posix_path, new_name="c.dxf")], "Rename")
+    assert change["status"] == "pending"
+    assert not path.exists()
+    assert path.with_name("c.dxf").exists()
+
+
 def test_rename_can_revert_without_autocad(managed, monkeypatch):
     path, handle, project, manager, _ = managed
     import src.cad.changes as module
@@ -180,6 +223,48 @@ def test_rename_can_revert_without_autocad(managed, monkeypatch):
     manager.revert(change["change_set_id"])
     assert path.read_bytes() == original
     assert not path.with_name("b.dxf").exists()
+
+
+def test_rename_revert_resumes_after_transient_failure_removing_renamed_file(managed, monkeypatch):
+    """Reproduces, and fixes, a real stuck-state bug: if `revert()` restores
+    `original_path` from the backup but then hits a transient failure (e.g. a
+    locked file) removing the now-superfluous renamed file, `original_path`
+    is left existing. A naive retry's own conflict guard
+    ("Original rename destination now exists") would previously see that
+    already-correct restoration and refuse to proceed forever — the very
+    state the first attempt's partial success left behind permanently
+    blocked every future retry, with no way to recover short of manual
+    intervention. See `ChangeManager._check_files`/`revert`."""
+    path, handle, project, manager, _ = managed
+    import src.cad.changes as module
+    original = path.read_bytes()
+
+    change = manager.apply(project, [dict(command="RENAME_FILE", target_dwg_path=str(path), new_name="b.dxf")], "Rename")
+    renamed_path = path.with_name("b.dxf")
+    assert not path.exists()
+    assert renamed_path.exists()
+
+    real_unlink = Path.unlink
+    def failing_unlink(self, *args, **kwargs):
+        if self == renamed_path:
+            raise PermissionError("simulated: file locked by another process")
+        return real_unlink(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+    with pytest.raises(PermissionError):
+        manager.revert(change["change_set_id"])
+
+    # The partial-failure state this bug is about: original restored,
+    # renamed file NOT yet removed because the injected fault blocked it.
+    assert path.read_bytes() == original
+    assert renamed_path.exists()
+    assert get_change_set(change["change_set_id"])["status"] == "reverting"
+
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    result = manager.revert(change["change_set_id"])
+    assert result["status"] == "reverted"
+    assert path.read_bytes() == original
+    assert not renamed_path.exists()
 
 
 def test_changeset_api_apply_detail_and_revert(managed, monkeypatch):

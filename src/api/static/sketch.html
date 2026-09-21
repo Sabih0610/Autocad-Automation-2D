@@ -156,6 +156,7 @@
     }
 
     .chat {
+      min-height: 0;
       overflow-y: auto;
       padding: 34px 24px 24px;
     }
@@ -305,10 +306,12 @@
       border: 0;
       color: var(--text);
       font: inherit;
-      max-height: 180px;
+      line-height: 1.5;
+      max-height: min(46vh, 520px);
       min-height: 52px;
       outline: none;
-      resize: vertical;
+      overflow-y: hidden;
+      resize: none;
       width: 100%;
     }
 
@@ -1256,6 +1259,7 @@
         `;
         button.addEventListener("click", () => {
           promptInput.value = item.prompt || "";
+          autoGrowPrompt();
           promptInput.focus();
         });
         recentList.appendChild(button);
@@ -1660,11 +1664,16 @@
       }
 
       promptInput.value = "";
+      autoGrowPrompt();
       createMessage("user", prompt);
       setSending(true);
 
       try {
         const newDrawingRequest = isNewDrawingRequest(prompt);
+        if (window.projectChat && window.projectChat.selected()) {
+          await window.projectChat.send(prompt);
+          return;
+        }
         const cad3dRequest = is3DRequest(prompt);
         const pidRequest = isPIDRequest(prompt);
         const cad3dContext = hasCAD3DContext();
@@ -1707,7 +1716,18 @@
       }
     }
 
+    function autoGrowPrompt() {
+      promptInput.style.height = "auto";
+      const maxHeight = parseFloat(window.getComputedStyle(promptInput).maxHeight);
+      const needed = promptInput.scrollHeight;
+      const height = Number.isFinite(maxHeight) ? Math.min(needed, maxHeight) : needed;
+      promptInput.style.height = `${height}px`;
+      promptInput.style.overflowY = needed > height ? "auto" : "hidden";
+    }
+
     sendButton.addEventListener("click", sendPrompt);
+    promptInput.addEventListener("input", autoGrowPrompt);
+    window.addEventListener("resize", autoGrowPrompt);
     promptInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
@@ -1719,12 +1739,15 @@
       latestGeneration = null;
       messages.innerHTML = "";
       promptInput.value = "";
+      autoGrowPrompt();
       promptInput.focus();
     });
 
     renderRecent();
+    autoGrowPrompt();
     createMessage("assistant", "Open AutoCAD with an active drawing. Describe a new sketch to build, or ask for a small edit to the current drawing.");
   </script>
   <script src="/changesets.js"></script>
+  <script src="/project-chat.js"></script>
 </body>
 </html>

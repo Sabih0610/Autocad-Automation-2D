@@ -54,6 +54,7 @@ class GateValveComponent(BasePIDComponent):
             center=self.center,
             size=self.size,
             orientation=self.orientation,
+            tag=self.tag,
         )
 
 
@@ -76,4 +77,5 @@ class ControlValveComponent(BasePIDComponent):
             center=self.center,
             size=self.size,
             orientation=self.orientation,
+            tag=self.tag,
         )

@@ -22,7 +22,7 @@ def respond(call):
         return call()
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
-    except (ValueError, OSError, sqlite3.IntegrityError, ValidationError) as exc:
+    except (ValueError, OSError, sqlite3.IntegrityError, sqlite3.OperationalError, ValidationError) as exc:
         raise HTTPException(409, str(exc)) from exc
 
 

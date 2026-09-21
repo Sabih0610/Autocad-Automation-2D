@@ -125,8 +125,19 @@ def pid_approve(request: PIDApproveRequest):
             detail=f"P&ID execution failed: {type(exc).__name__}: {_short_error(exc)}",
         ) from exc
 
+    ok = bool(execution_result.get("ok"))
+    if ok:
+        # A successful approve must consume its token — without this, the
+        # exact same P&ID could be re-executed into AutoCAD an unlimited
+        # number of times with one token, since `_PID_CACHE` never expires
+        # entries on its own. A failed attempt (ok=False, e.g. a partial
+        # per-command failure) deliberately keeps the token so the caller
+        # can retry, matching `/api/autocad/edit`'s and `/api/sketch/
+        # approve`'s existing retry-on-failure convention.
+        _PID_CACHE.pop(request.token, None)
+
     return {
-        "ok": bool(execution_result.get("ok")),
+        "ok": ok,
         "executed": True,
         "token": request.token,
         "execution_result": execution_result,

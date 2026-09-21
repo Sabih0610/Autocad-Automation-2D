@@ -15,6 +15,39 @@ from src.storage.entity_repository import find_by_tag
 from src.storage.project_repository import get_project, now
 
 
+def reconcile_interrupted_jobs():
+    """Recover multi-file jobs stranded by a process crash.
+
+    `_execute` claims a job by flipping it from 'pending' to 'running'
+    *before* doing any of the actual work; if the process dies before that
+    work finishes (a crash, not a caught exception — those already mark the
+    job 'error'), the job is left stuck at 'running' forever. A later
+    `execute(job_id)` call can never claim it again, because the claim only
+    matches `status='pending'` — the job is permanently stranded with no
+    linked ChangeSet and no way to retry.
+
+    Call this once, at process startup, before any job is claimed. A
+    process that is only just starting up cannot have a live worker thread
+    from some earlier run of itself still executing a job — `WRITE_QUEUE` is
+    a single in-process worker, so any 'running' row found here is
+    unambiguously stale, never a job genuinely in flight right now. Rather
+    than guess how much of a stale job actually completed and try to
+    resume it, mark it (and any of its still-pending/running items) as
+    failed, with a clear reason — the caller can inspect what happened via
+    `get_multi_file_job` and create a fresh plan.
+    """
+    with connection() as conn:
+        stale_job_ids = [row[0] for row in conn.execute(
+            "SELECT job_id FROM jobs_multi_file WHERE status='running'").fetchall()]
+        for job_id in stale_job_ids:
+            conn.execute("UPDATE jobs_multi_file SET status='error' WHERE job_id=?", (job_id,))
+            conn.execute(
+                "UPDATE job_items SET status='error',error=? WHERE job_id=? AND status IN ('pending','running')",
+                ("Interrupted by a process restart; create a new plan and retry", job_id),
+            )
+    return stale_job_ids
+
+
 def get_multi_file_job(job_id):
     with connection() as conn:
         row = conn.execute("SELECT * FROM jobs_multi_file WHERE job_id=?", (job_id,)).fetchone()
@@ -92,6 +125,20 @@ class ProjectOrchestrator:
                 if after <= 0:
                     raise ValueError("Planned length must be positive")
                 preview = dict(field="length_mm", before=before, after=after)
+            elif op["command"] == "RESIZE_COMPONENT" and op["dimension"] == "radius":
+                # Length resizing was validated for positivity here at plan
+                # time, but radius resizing was not — an invalid radius
+                # (e.g. a large negative delta) was only ever caught later,
+                # at execute time in modification_executor.py's `_resize`,
+                # by which point sibling job items in the same multi-file
+                # job may have already executed and been persisted.
+                if record["entity_type"] not in {"CIRCLE", "ARC"}:
+                    raise ValueError("Radius resize requires a CIRCLE or ARC; choose a supported entity")
+                before = (record["max_x"] - record["min_x"]) / 2 / from_mm(1, record["units"])
+                after = op.get("value_mm", before + op.get("delta_mm", 0))
+                if not math.isfinite(after) or after <= 0:
+                    raise ValueError("Planned radius must be positive and finite")
+                preview = dict(field="radius_mm", before=before, after=after)
             operations.append((record["drawing_id"], dict(operation=op, expected_hash=record["file_hash"], preview=preview)))
         job_id = uuid4().hex
         with connection() as conn:

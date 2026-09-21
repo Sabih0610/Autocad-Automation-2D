@@ -8,7 +8,7 @@ from src.logging import db
 from src.storage.database import connection
 from src.storage.entity_repository import find_by_tag
 from src.storage.project_repository import register_project
-from src.storage.spatial import SpatialIndex, ensure_spatial, RTREE_QUERY
+from src.storage.spatial import SpatialIndex, ensure_spatial, rebuild_spatial_index, RTREE_QUERY
 from tests.project.test_extractor import make_dxf
 
 
@@ -75,6 +75,63 @@ def test_existing_entity_only_edges_migrate_to_drawing_membership(tmp_path):
         assert len(related_entities(conn, pipe["entity_id"], "represented_in")) == 1
         assert [row["drawing_id"] for row in related_drawings(conn, pipe["entity_id"])] == [pipe["drawing_id"]]
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_rebuild_spatial_index_repairs_stale_rowid_mapping(tmp_path):
+    """`spatial_index.id` stores `entities.rowid`, which SQLite's own docs
+    say `VACUUM` may renumber for a table with no `INTEGER PRIMARY KEY`
+    (like `entities`, whose primary key is a `TEXT` `entity_id`). This
+    simulates exactly that staleness — the RTree's stored id no longer
+    matching the entity it was meant to reference — and proves
+    `rebuild_spatial_index` repairs it rather than silently returning
+    results for the wrong entity."""
+    path = tmp_path / "a.dxf"
+    make_dxf(path)
+    doc = ezdxf.readfile(path)
+    doc.modelspace().add_circle((500, 100, 0), 2)
+    doc.saveas(path)
+    project = register_project("Plant", str(tmp_path))
+    scan_project(project, max_workers=1)
+    pipe = find_by_tag(project, "P-101")[0]
+
+    with connection() as conn:
+        real_rowid = conn.execute("SELECT rowid FROM entities WHERE entity_id=?", (pipe["entity_id"],)).fetchone()[0]
+        # Simulate post-VACUUM staleness: point this entity's spatial_index
+        # row at a rowid far outside the table (no entity actually has it),
+        # exactly as if VACUUM had renumbered rowids out from under the
+        # already-populated index.
+        conn.execute("UPDATE spatial_index SET id=? WHERE id=?", (real_rowid + 1000, real_rowid))
+
+    index = SpatialIndex()
+    assert pipe["entity_id"] not in {row["entity_id"] for row in index.nearby(pipe["entity_id"], 100)}
+
+    with connection() as conn:
+        rebuild_spatial_index(conn)
+
+    index = SpatialIndex()
+    found = index.nearby(pipe["entity_id"], 100)
+    assert any(row["handle"] for row in found)  # the nearby circle is found again
+    with connection() as conn:
+        assert conn.execute("SELECT id FROM spatial_index WHERE id=?", (real_rowid,)).fetchone() is not None
+
+
+def test_nearby_missing_layout_property_gives_a_distinct_error_not_no_geometry(tmp_path):
+    """`nearby()`'s target lookup used an INNER JOIN on entity_properties
+    WHERE key='layout' — an entity with real geometry but no indexed
+    'layout' property was filtered out by that join and misreported as
+    "No current indexed geometry", the same message used for an entity
+    that plain doesn't exist. The real cause deserves its own message."""
+    path = tmp_path / "a.dxf"
+    make_dxf(path)
+    project = register_project("Plant", str(tmp_path))
+    scan_project(project, max_workers=1)
+    pipe = find_by_tag(project, "P-101")[0]
+    with connection() as conn:
+        conn.execute("DELETE FROM entity_properties WHERE entity_id=? AND key='layout'", (pipe["entity_id"],))
+
+    with pytest.raises(ValueError, match="layout") as exc_info:
+        SpatialIndex().nearby(pipe["entity_id"], 100)
+    assert "No current indexed geometry" not in str(exc_info.value)
 
 
 def test_rtree_probe_falls_back_only_for_missing_extension():

@@ -45,6 +45,8 @@ def store_snapshot(conn, drawing_id, snapshot):
     conn.execute("INSERT INTO drawing_metadata VALUES (?,?,?) ON CONFLICT(drawing_id) DO UPDATE SET units=excluded.units,payload=excluded.payload",
                  (drawing_id, snapshot.document.units, json.dumps(asdict(snapshot.document), allow_nan=False)))
     for relation in snapshot.relationships:
+        if relation.source_handle not in ids or relation.target_handle not in ids:
+            raise ValueError("Relationship references an unknown entity")
         conn.execute("""INSERT OR IGNORE INTO relationships
             (source_entity_id,relationship_type,target_entity_id) VALUES (?,?,?)""",
                      (ids[relation.source_handle], relation.relationship_type, ids[relation.target_handle]))
@@ -54,7 +56,7 @@ def store_snapshot(conn, drawing_id, snapshot):
             VALUES (?,'appears_in',?)""", (eid, drawing_id))
     # Same tag in another drawing is a representation, never spatial connectivity.
     for entity in snapshot.entities:
-        if not entity.tag:
+        if not entity.tag or not entity.tag.strip():
             continue
         others = conn.execute("""SELECT e.entity_id FROM entities e JOIN drawings d ON d.drawing_id=e.drawing_id
             WHERE e.tag=? COLLATE NOCASE AND e.drawing_id<>? AND d.scan_status='scanned'

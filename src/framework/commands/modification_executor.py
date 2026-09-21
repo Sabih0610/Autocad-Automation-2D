@@ -8,6 +8,7 @@ from src.cad.session import CAD_LOCK, cad_session, canonical_path, get_document,
 from src.cad.units import from_mm
 from src.cad.scanner import file_hash
 from src.cad.relationships import related_entities
+from src.parametric.vessel.dwg_export import _com_retry
 from src.storage.database import connection
 from src.storage.entity_repository import get_entity
 from src.storage.spatial import SpatialIndex, bounds_distance
@@ -28,18 +29,36 @@ class Assignment:
 
 
 def _assign(change, value):
-    setattr(change.obj, change.property, point(value) if change.is_point else value)
+    # The legacy executor (executor.py) already retries transient "AutoCAD
+    # busy" COM errors via `_com_retry`; this module previously had no such
+    # retry anywhere, so a transient busy error here aborted the whole
+    # operation (triggering a full rollback) where the legacy path would
+    # just wait and try again. `_assign` is the single point every
+    # property/coordinate assignment in this module goes through, forward
+    # and rollback alike, so retrying here covers all of them.
+    actual_value = point(value) if change.is_point else value
+    _com_retry(lambda: setattr(change.obj, change.property, actual_value), f"assigning {change.property}")
 
 
-def _indexed_record(path, handle, eid=None):
+def _indexed_record(path, handle, eid=None, project_id=None):
     if eid:
         record = get_entity(eid)
         if record["path"] != path or record["handle"] != handle:
             raise ValueError("Operation does not match the indexed entity")
         return record
+    # Without a project scope, two overlapping registered projects (e.g. a
+    # parent folder and one of its own subfolders, both registered and
+    # scanned separately) each index the same physical file under their own
+    # drawing_id — a path+handle lookup with no project filter then matches
+    # both rows and always fails as "not uniquely indexed," even though the
+    # caller unambiguously selected one specific project to edit in.
     with connection() as conn:
-        rows = conn.execute("""SELECT e.entity_id FROM entities e JOIN drawings d ON d.drawing_id=e.drawing_id
-            WHERE d.path=? AND e.handle=?""", (path, handle)).fetchall()
+        if project_id is None:
+            rows = conn.execute("""SELECT e.entity_id FROM entities e JOIN drawings d ON d.drawing_id=e.drawing_id
+                WHERE d.path=? AND e.handle=?""", (path, handle)).fetchall()
+        else:
+            rows = conn.execute("""SELECT e.entity_id FROM entities e JOIN drawings d ON d.drawing_id=e.drawing_id
+                WHERE d.path=? AND e.handle=? AND d.project_id=?""", (path, handle, project_id)).fetchall()
     if len(rows) != 1:
         raise ValueError("Entity must be uniquely indexed before editing; scan and select a project")
     return get_entity(rows[0][0])
@@ -119,7 +138,13 @@ def _resize(doc, entity, op, record):
             raise ValueError("New radius must be positive and finite")
         changes.append(Assignment(entity, "Radius", before, after, op["handle"]))
         center = tuple(entity.Center)
-        if tuple(entity.Normal) != (0.0, 0.0, 1.0):
+        if math.dist(tuple(entity.Normal), (0.0, 0.0, 1.0)) > 1e-6:
+            # Exact equality here previously rejected legitimate XY-plane
+            # circles/arcs whenever COM returned a Normal like
+            # (0.0, 0.0, 0.9999999999999998) instead of exactly (0, 0, 1) —
+            # a real, observed floating-point representation, not a
+            # hypothetical one. Use the same 1e-6 tolerance already used
+            # elsewhere in this function for point/distance comparisons.
             raise ValueError("Radius edits currently require a circle/arc in the XY plane")
         proposed[record["entity_id"]] = box_for_points((center[0]-after, center[1]-after, center[2]),
                                                        (center[0]+after, center[1]+after, center[2]))
@@ -175,7 +200,21 @@ def rename_file(op):
         raise ValueError("Rename must preserve the file type and may not overwrite a file")
     with connection() as conn:
         opened = conn.execute("SELECT is_open FROM drawing_sessions WHERE path=?", (str(source),)).fetchone()
-        if (opened and opened[0]) or source.with_suffix(".dwl").exists() or source.with_suffix(".dwl2").exists():
+        lock_files_exist = source.with_suffix(".dwl").exists() or source.with_suffix(".dwl2").exists()
+        if opened and opened[0] and not lock_files_exist:
+            # `is_open` only ever gets cleared by ChangeManager._close_targets
+            # during a revert — a normal successful edit leaves the drawing
+            # open in AutoCAD by design, and an external close (the user
+            # closing it directly in AutoCAD, outside this app entirely) has
+            # no way to notify us. Without this, `is_open` could get stuck at
+            # 1 forever, permanently blocking every future rename attempt.
+            # AutoCAD's own `.dwl`/`.dwl2` sidecar lock files are removed the
+            # moment it genuinely closes a drawing, so their absence is a
+            # more reliable, filesystem-level signal than our own possibly
+            # stale flag — reconcile rather than trust the flag blindly.
+            conn.execute("UPDATE drawing_sessions SET is_open=0 WHERE path=?", (str(source),))
+            opened = None
+        if (opened and opened[0]) or lock_files_exist:
             raise ValueError("Close the drawing in AutoCAD before renaming")
         source.rename(destination)
         try:
@@ -198,14 +237,14 @@ def _backup_before_edit(path, preexisting_backup_path):
 
 
 def execute_operation(operation, *, acad=None, entity_id=None, verify_extractor=None,
-                      _preexisting_backup_path=None):
+                      _preexisting_backup_path=None, project_id=None):
     validate_operation(operation)
     path = canonical_path(operation["target_dwg_path"])
     with CAD_LOCK:
         if operation["command"] == "RENAME_FILE":
             backup = _backup_before_edit(path, _preexisting_backup_path)
             return dict(rename_file(operation), backup_path=backup)
-        record = _indexed_record(path, operation["handle"], entity_id) if "handle" in operation else None
+        record = _indexed_record(path, operation["handle"], entity_id, project_id) if "handle" in operation else None
         if record:
             _verify_index(record, path)
         with cad_session(acad) as session:
@@ -236,18 +275,47 @@ def execute_operation(operation, *, acad=None, entity_id=None, verify_extractor=
                         if change.is_point:
                             if math.dist(tuple(actual), change.after) > 1e-6:
                                 raise ValueError("AutoCAD did not retain the assigned coordinate")
+                        elif change.property in {"Layer", "Linetype"}:
+                            # Layer/linetype names are case-insensitive but
+                            # case-preserving in AutoCAD — comparing the exact
+                            # string AutoCAD echoes back against what was
+                            # assigned can spuriously fail if it returns an
+                            # existing layer/linetype's own stored casing
+                            # rather than the casing this operation sent.
+                            if str(actual).casefold() != str(change.after).casefold():
+                                raise ValueError("AutoCAD did not retain the assigned property")
                         elif actual != change.after:
                             raise ValueError("AutoCAD did not retain the assigned property")
                     summary = [change.summary() for change in changes]
-                doc.Save()
-            except Exception:
+                _com_retry(lambda: doc.Save(), "saving document")
+            except Exception as original_exc:
+                # Roll back everything we can, even if one rollback step
+                # itself fails (e.g. a second, unrelated COM error) — an
+                # unguarded rollback loop would previously abort at the first
+                # failure, leaving every earlier-in-the-list (later-applied)
+                # change un-reverted in the live, unsaved document, and would
+                # mask the original failure behind whatever the rollback step
+                # raised instead.
+                rollback_errors = []
                 for change in reversed(applied):
-                    _assign(change, change.before)
+                    try:
+                        _assign(change, change.before)
+                    except Exception as rollback_exc:
+                        rollback_errors.append(f"{change.property} on {change.handle}: {rollback_exc}")
                 if custom and 'before' in locals():
-                    if before is None:
-                        info.RemoveCustomByKey(key)
-                    else:
-                        info.SetCustomByKey(key, before)
+                    try:
+                        if before is None:
+                            info.RemoveCustomByKey(key)
+                        else:
+                            info.SetCustomByKey(key, before)
+                    except Exception as rollback_exc:
+                        rollback_errors.append(f"custom:{key}: {rollback_exc}")
+                if rollback_errors:
+                    raise RuntimeError(
+                        f"Edit failed ({type(original_exc).__name__}: {original_exc}) and "
+                        "rollback could not fully undo it — the live document may be left "
+                        f"partially modified (unsaved): {'; '.join(rollback_errors)}"
+                    ) from original_exc
                 raise
         snapshot = verify_extractor.extract(path) if verify_extractor else None
         if snapshot and operation["command"] == "RESIZE_COMPONENT":
@@ -257,4 +325,25 @@ def execute_operation(operation, *, acad=None, entity_id=None, verify_extractor=
             actual = props["end"] if first.property == "EndPoint" else props["radius"]
             if first.is_point and math.dist(actual, first.after) > 1e-6 or not first.is_point and abs(actual - first.after) > 1e-6:
                 raise ValueError("Saved-file re-extraction did not confirm the resize")
+        elif snapshot and operation["command"] == "SET_ENTITY_PROPERTY" and operation["property"] != "attribute":
+            # RESIZE_COMPONENT was previously the only operation whose saved
+            # value got re-verified by re-extraction; every other operation
+            # only checked that extraction *succeeded*, not that the intended
+            # value actually persisted — a COM `Save()` that silently no-ops
+            # would still have been reported as verified. Cover
+            # color/layer/linetype/text here too. "attribute" is excluded: it
+            # edits a nested ATTRIB entity whose handle isn't necessarily a
+            # top-level record in `snapshot.properties`, so it needs its own
+            # follow-up rather than a guess here.
+            handle = operation["handle"]
+            props = snapshot.properties.get(handle)
+            key = {"color": "color", "layer": "layer", "linetype": "linetype", "text": "text"}[operation["property"]]
+            expected = changes[0].after
+            actual = props.get(key) if props else None
+            matches = (
+                str(actual).casefold() == str(expected).casefold()
+                if key in {"layer", "linetype"} else actual == expected
+            )
+            if props is None or not matches:
+                raise ValueError("Saved-file re-extraction did not confirm the property change")
         return dict(path=path, changes=summary, verified_by_extraction=snapshot is not None, backup_path=backup)

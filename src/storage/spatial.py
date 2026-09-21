@@ -10,6 +10,33 @@ from src.cad.units import from_mm
 from src.logging import db
 
 
+def rebuild_spatial_index(conn):
+    """Fully repopulate `spatial_index` from the current `entities`/
+    `entity_geometry` rows, discarding whatever it previously contained.
+
+    `spatial_index.id` stores `entities.rowid`. `entities.entity_id` is a
+    `TEXT PRIMARY KEY`, so `entities` has no explicit `INTEGER PRIMARY KEY`
+    — per SQLite's own documentation, `VACUUM` may renumber the rowids of
+    exactly this kind of table. Nothing in this codebase calls `VACUUM`
+    today, but if anything ever does, every `id` value already stored in
+    `spatial_index` would silently point at whatever entity now happens to
+    have that rowid — wrong results, no error. Call this immediately after
+    any `VACUUM` of this database (or if a mismatch is ever suspected for
+    any other reason) to resync `spatial_index` to the current rowids.
+    """
+    has_rtree = conn.execute("SELECT 1 FROM sqlite_master WHERE name='spatial_index'").fetchone()
+    if has_rtree:
+        conn.execute("DELETE FROM spatial_index")
+        conn.execute("""INSERT INTO spatial_index SELECT e.rowid,g.min_x,g.max_x,g.min_y,g.max_y,g.min_z,g.max_z
+            FROM entities e JOIN entity_geometry g ON g.entity_id=e.entity_id""")
+    # The cKDTree fallback is keyed by `spatial_version` and rebuilt lazily
+    # from `entities`/`entity_geometry` directly (never from `spatial_index`
+    # or a cached rowid), so it isn't affected by rowid renumbering at all —
+    # bumping the version here only forces existing `SpatialIndex` instances
+    # to drop their in-memory cache rather than because it's stale data.
+    conn.execute("UPDATE spatial_version SET version=version+1 WHERE id=1")
+
+
 def ensure_spatial(conn):
     existed = conn.execute("SELECT 1 FROM sqlite_master WHERE name='spatial_index'").fetchone()
     try:
@@ -18,6 +45,13 @@ def ensure_spatial(conn):
         if "no such module" not in str(exc).lower():
             raise
         return False
+    # entity_geometry rows are always written via delete-then-insert, never
+    # UPDATE (see entity_repository.store_snapshot), so an AFTER UPDATE
+    # trigger here could never fire; it's intentionally not (re)created. A
+    # database created before this was noticed may still have it on disk —
+    # see database.py's connection(), which drops it unconditionally on
+    # every call rather than only here, since ensure_spatial itself only
+    # runs once per DB.
     conn.executescript("""
         CREATE TRIGGER IF NOT EXISTS spatial_insert AFTER INSERT ON entity_geometry BEGIN
             INSERT OR REPLACE INTO spatial_index SELECT e.rowid,new.min_x,new.max_x,new.min_y,new.max_y,new.min_z,new.max_z
@@ -25,10 +59,6 @@ def ensure_spatial(conn):
         END;
         CREATE TRIGGER IF NOT EXISTS spatial_delete BEFORE DELETE ON entity_geometry BEGIN
             DELETE FROM spatial_index WHERE id=(SELECT rowid FROM entities WHERE entity_id=old.entity_id);
-        END;
-        CREATE TRIGGER IF NOT EXISTS spatial_update AFTER UPDATE ON entity_geometry BEGIN
-            INSERT OR REPLACE INTO spatial_index SELECT e.rowid,new.min_x,new.max_x,new.min_y,new.max_y,new.min_z,new.max_z
-            FROM entities e WHERE e.entity_id=new.entity_id;
         END;
     """)
     if not existed:
@@ -70,10 +100,12 @@ class SpatialIndex:
             target = conn.execute("""SELECT g.*,e.drawing_id,m.units,p.value AS layout FROM entity_geometry g
                 JOIN entities e ON e.entity_id=g.entity_id JOIN drawings d ON d.drawing_id=e.drawing_id
                 JOIN drawing_metadata m ON m.drawing_id=e.drawing_id
-                JOIN entity_properties p ON p.entity_id=e.entity_id AND p.key='layout'
+                LEFT JOIN entity_properties p ON p.entity_id=e.entity_id AND p.key='layout'
                 WHERE e.entity_id=? AND d.scan_status='scanned'""", (eid,)).fetchone()
             if target is None:
                 raise ValueError("No current indexed geometry for the selected entity")
+            if target["layout"] is None:
+                raise ValueError("Selected entity has no indexed 'layout' property; rescan the drawing")
             radius = from_mm(radius_mm, target["units"])
             low, high = bounds(target)
             has_rtree = conn.execute("SELECT 1 FROM sqlite_master WHERE name='spatial_index'").fetchone()

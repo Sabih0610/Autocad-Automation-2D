@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from src.cad.session import serialized
 from src.framework.commands.edit_schema import validate_edit_plan
 from src.framework.commands.executor import execute_commands
 from src.parametric.vessel.dwg_export import (
@@ -132,6 +133,7 @@ def _normalize_add_errors(add_result: dict) -> list[dict]:
     return normalized_errors
 
 
+@serialized
 def execute_edit_plan(
     edit_plan: dict,
     target_dwg_path: str | None = None,

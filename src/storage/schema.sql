@@ -131,10 +131,13 @@ CREATE TABLE IF NOT EXISTS change_set_files (
     PRIMARY KEY(change_set_id,drawing_id)
 );
 INSERT OR IGNORE INTO spatial_version VALUES (1,0);
+-- entity_geometry rows are always written via delete-then-insert, never
+-- UPDATE (see entity_repository.store_snapshot), so an AFTER UPDATE trigger
+-- here could never fire; it's intentionally not (re)created. A database
+-- created before this was noticed may still have it on disk — see
+-- database.py's connection(), which drops it unconditionally on every call
+-- rather than only here, since this script itself only runs once per DB.
 CREATE TRIGGER IF NOT EXISTS geometry_version_insert AFTER INSERT ON entity_geometry BEGIN
-    UPDATE spatial_version SET version=version+1 WHERE id=1;
-END;
-CREATE TRIGGER IF NOT EXISTS geometry_version_update AFTER UPDATE ON entity_geometry BEGIN
     UPDATE spatial_version SET version=version+1 WHERE id=1;
 END;
 CREATE TRIGGER IF NOT EXISTS geometry_version_delete AFTER DELETE ON entity_geometry BEGIN

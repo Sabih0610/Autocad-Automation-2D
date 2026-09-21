@@ -46,6 +46,12 @@ _COMMENT_PROPERTY = {
 }
 
 
+_TAG_PROPERTY = {
+    "type": "string",
+    "minLength": 1,
+}
+
+
 COMMAND_SCHEMA: dict[str, Any] = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "AutoCAD AI Command Sequence",
@@ -188,6 +194,7 @@ COMMAND_SCHEMA: dict[str, Any] = {
                 "to": {"$ref": "#/definitions/coordinate"},
                 "layer": _LAYER_PROPERTY,
                 "comment": _COMMENT_PROPERTY,
+                "tag": _TAG_PROPERTY,
             },
         },
         "circle_command": {
@@ -203,6 +210,7 @@ COMMAND_SCHEMA: dict[str, Any] = {
                 },
                 "layer": _LAYER_PROPERTY,
                 "comment": _COMMENT_PROPERTY,
+                "tag": _TAG_PROPERTY,
             },
         },
         "arc_command": {
@@ -226,6 +234,7 @@ COMMAND_SCHEMA: dict[str, Any] = {
                 "end_angle_degrees": {"type": "number"},
                 "layer": _LAYER_PROPERTY,
                 "comment": _COMMENT_PROPERTY,
+                "tag": _TAG_PROPERTY,
             },
         },
         "ellipse_command": {
@@ -250,6 +259,7 @@ COMMAND_SCHEMA: dict[str, Any] = {
                 "end_angle_degrees": {"type": "number"},
                 "layer": _LAYER_PROPERTY,
                 "comment": _COMMENT_PROPERTY,
+                "tag": _TAG_PROPERTY,
             },
         },
         "polyline_command": {
@@ -266,6 +276,7 @@ COMMAND_SCHEMA: dict[str, Any] = {
                 "closed": {"type": "boolean"},
                 "layer": _LAYER_PROPERTY,
                 "comment": _COMMENT_PROPERTY,
+                "tag": _TAG_PROPERTY,
             },
         },
         "text_command": {
@@ -306,6 +317,7 @@ COMMAND_SCHEMA: dict[str, Any] = {
                 "rotation_degrees": {"type": "number"},
                 "layer": _LAYER_PROPERTY,
                 "comment": _COMMENT_PROPERTY,
+                "tag": _TAG_PROPERTY,
             },
         },
         "dim_linear_command": {
@@ -326,17 +338,19 @@ COMMAND_SCHEMA: dict[str, Any] = {
 }
 
 
-from .operation_schema import OPERATION_SCHEMA, OPERATION_VARIANTS, validate_operation
-
-# Existing creation schemas remain unchanged. Structured modifications carry their
-# own explicit path and are dispatched through modification_executor.
-for _variant in OPERATION_VARIANTS:
-    _name = _variant["properties"]["command"]["const"]
-    _COMMAND_TYPES.append(_name)
-    COMMAND_SCHEMA["properties"]["commands"]["items"]["allOf"].append({
-        "if": {"properties": {"command": {"const": _name}}, "required": ["command"]},
-        "then": _variant,
-    })
+# NOTE: structured modification operations (RESIZE_COMPONENT, SET_ENTITY_PROPERTY,
+# SET_DOCUMENT_PROPERTY, SET_LAYER_COLOR, RENAME_FILE) are validated entirely through
+# `operation_schema.validate_operation` / `OPERATION_SCHEMA`, dispatched via
+# `modification_executor.py`. They are deliberately NOT added to `_COMMAND_TYPES` or
+# `COMMAND_SCHEMA` here. `_COMMAND_TYPES` is embedded by reference inside
+# `COMMAND_SCHEMA["properties"]["commands"]["items"]["properties"]["command"]["enum"]`,
+# and `edit_schema.py` derives `EDIT_PLAN_SCHEMA` from a deepcopy of `COMMAND_SCHEMA` at
+# import time — mutating either object here previously leaked the 5 operation command
+# types into the legacy creation/edit schemas (and, since `src/ai/client.py` dumps the
+# full JSON schema into every LLM system prompt, into the sketch/edit-generation AI
+# prompts too), even though the legacy executor has no handler for them. Keep this
+# import-time module fully free of any mutation of `COMMAND_SCHEMA`/`_COMMAND_TYPES`.
+# Callers that need the operation schema import it directly from `operation_schema`.
 
 _VALIDATOR = Draft7Validator(COMMAND_SCHEMA)
 

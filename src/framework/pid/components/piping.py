@@ -73,7 +73,7 @@ class PipeRunComponent(BasePIDComponent):
         }
 
     def render(self) -> list[dict]:
-        commands = pipe_line_commands(self.points)
+        commands = pipe_line_commands(self.points, tag=self.tag)
 
         if self.label:
             label_position = self.label_position

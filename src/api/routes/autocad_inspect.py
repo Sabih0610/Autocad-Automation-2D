@@ -24,7 +24,11 @@ def inspect_autocad_drawing(
 
     pythoncom.CoInitialize()
     try:
-        options = {"target_dwg_path": target_dwg_path} if target_dwg_path else {}
+        # `is not None`, not truthiness: an explicitly-sent empty string must
+        # still be forwarded (and rejected downstream with a clear error by
+        # `canonical_path`) rather than being silently treated the same as
+        # "no target given" and falling back to `ActiveDocument`.
+        options = {"target_dwg_path": target_dwg_path} if target_dwg_path is not None else {}
         inspection = inspect_active_drawing(max_entities=max_entities, **options)
         summary = summarize_drawing_state(inspection)
     except AutoCADNotRunningError as exc:

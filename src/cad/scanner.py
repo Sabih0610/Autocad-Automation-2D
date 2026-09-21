@@ -1,5 +1,6 @@
 """On-demand, incremental offline scans. Workers never touch SQLite or COM."""
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 import hashlib
 import os
 from pathlib import Path
@@ -49,7 +50,8 @@ def _store_snapshot(conn, drawing_id, snapshot):
 
 
 @serialized
-def scan_project(project_id, *, extractor_factory=configured_extractor, max_workers=None):
+def scan_project(project_id, *, extractor_factory=configured_extractor, max_workers=None,
+                  pool_factory=ProcessPoolExecutor):
     project = get_project(project_id)
     if project["status"] != "active":
         raise ValueError("Cannot scan an archived project")
@@ -60,9 +62,16 @@ def scan_project(project_id, *, extractor_factory=configured_extractor, max_work
     if workers < 1:
         raise ValueError("max_workers must be positive")
     existing = {row["path"]: row for row in list_drawings(project_id)}
+    # Exclude any "backups" subfolder found *within* the scanned project tree
+    # (e.g. this repo's own `backups/` and `src/backups/` both matched this
+    # when the project root was the repo itself) — checked relative to `root`
+    # only, so a project whose own root path happens to sit under a
+    # "backups"-named ancestor directory (outside the scan) isn't wrongly
+    # excluded wholesale.
     paths = sorted({p.resolve() for p in root.rglob("*") if p.is_file()
                     and p.suffix.lower() in {".dwg", ".dxf"}
-                    and p.resolve().is_relative_to(root)})
+                    and p.resolve().is_relative_to(root)
+                    and "backups" not in {part.lower() for part in p.resolve().relative_to(root).parts}})
     report = dict(discovered=len(paths), extracted=0, skipped=0, errors=[])
     pending = []
     for path in paths:
@@ -115,15 +124,47 @@ def scan_project(project_id, *, extractor_factory=configured_extractor, max_work
             else:
                 complete(item, snapshot=snapshot)
     elif pending:
-        with ProcessPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(_extract_file, extractor_factory, item[1], item[2]): item for item in pending}
-            for future in as_completed(futures):
-                try:
-                    snapshot = future.result()
-                except Exception as exc:
-                    complete(futures[future], error=exc)
-                else:
-                    complete(futures[future], snapshot=snapshot)
+        # If a worker process crashes outright (not a normal exception raised
+        # *inside* `_extract_file`, but the worker dying — e.g. a native
+        # crash), every other still-pending future in that same pool also
+        # raises BrokenProcessPool when `.result()` is called, even though
+        # only the one file being processed when the crash happened is
+        # actually implicated. Left unhandled, that previously marked every
+        # *other* pending file as errored too — collateral damage for files
+        # that were never even attempted. Retry only the files that never
+        # got a result, in a fresh pool, instead of blaming the whole batch.
+        remaining = list(pending)
+        restarts = 0
+        max_restarts = len(pending)
+        while remaining:
+            finished_this_round = set()
+            try:
+                with pool_factory(max_workers=workers) as pool:
+                    futures = {pool.submit(_extract_file, extractor_factory, item[1], item[2]): item
+                               for item in remaining}
+                    for future in as_completed(futures):
+                        item = futures[future]
+                        try:
+                            snapshot = future.result()
+                        except BrokenProcessPool:
+                            raise
+                        except Exception as exc:
+                            complete(item, error=exc)
+                            finished_this_round.add(item)
+                        else:
+                            complete(item, snapshot=snapshot)
+                            finished_this_round.add(item)
+            except BrokenProcessPool as exc:
+                remaining = [item for item in remaining if item not in finished_this_round]
+                restarts += 1
+                if restarts > max_restarts:
+                    # Safety valve: something is crashing every fresh pool
+                    # (not just one bad file) — stop restarting forever.
+                    for item in remaining:
+                        complete(item, error=RuntimeError(f"Worker process crashed repeatedly: {exc}"))
+                    remaining = []
+                continue
+            remaining = []
     discovered = {str(path) for path in paths}
     for path, row in existing.items():
         if path not in discovered:

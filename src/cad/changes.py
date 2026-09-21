@@ -75,8 +75,16 @@ class ChangeManager:
             if file_hash(path) != row["file_hash"]:
                 raise ValueError("Drawing changed since scanning; rescan first")
             targets[path] = dict(row)
-        rename_paths = {op["target_dwg_path"] for op in operations if op["command"] == "RENAME_FILE"}
-        if any(sum(op["target_dwg_path"] == path for op in operations) != 1 for path in rename_paths):
+        # Canonicalized to match `targets`' keys (built via `canonical_path`
+        # above) — comparing a raw `op["target_dwg_path"]` string (which may
+        # use forward slashes, a different case, or a non-resolved path)
+        # against `targets`' canonicalized keys below previously could fail
+        # to recognize a rename's own target as one of `targets`, causing
+        # `get_document(acad, path)` to run for it with `acad=None` (since a
+        # changeset containing only a rename never opens a COM session) and
+        # crash with "'NoneType' object has no attribute 'Documents'".
+        rename_paths = {canonical_path(op["target_dwg_path"]) for op in operations if op["command"] == "RENAME_FILE"}
+        if any(sum(canonical_path(op["target_dwg_path"]) == path for op in operations) != 1 for path in rename_paths):
             raise ValueError("A rename must be the only operation on its file in a changeset")
         has_cad = any(op["command"] != "RENAME_FILE" for op in operations)
         with CAD_LOCK, (cad_session(self.acad) if has_cad else nullcontext(None)) as acad:
@@ -108,7 +116,8 @@ class ChangeManager:
                     if on_item:
                         on_item(index, "running", None)
                     result = execute_operation(op, acad=acad, verify_extractor=self.extractor_factory(),
-                                               _preexisting_backup_path=backups[active_path])
+                                               _preexisting_backup_path=backups[active_path],
+                                               project_id=project_id)
                     current_path = result["path"]
                     self._record_file(change_id, row["drawing_id"], current_path)
                     with connection() as conn:
@@ -169,13 +178,30 @@ class ChangeManager:
     def _check_files(change):
         for item in change["files"]:
             current = Path(item["current_path"])
-            expected = item["after_hash"] or item["before_hash"]
-            if not current.exists() or file_hash(current) != expected:
-                raise ValueError("Drawing changed after this changeset; refusing to overwrite later work")
+            # A revert that already restored `original_path` but failed before
+            # removing `current_path` (e.g. a transient PermissionError) is a
+            # resumable, expected intermediate state, not damage — `current`
+            # simply won't have been touched since that failed attempt, so it
+            # still matches `after_hash` unconditionally requiring `current` to
+            # exist below would otherwise permanently block a retry.
+            resuming_revert = change["status"] == "reverting" and not current.exists()
+            if not resuming_revert:
+                expected = item["after_hash"] or item["before_hash"]
+                if not current.exists() or file_hash(current) != expected:
+                    raise ValueError("Drawing changed after this changeset; refusing to overwrite later work")
             if file_hash(item["backup_path"]) != item["before_hash"]:
                 raise ValueError("Backup integrity check failed")
             if item["current_path"] != item["original_path"] and Path(item["original_path"]).exists():
-                raise ValueError("Original rename destination now exists; refusing to overwrite it")
+                # Distinguish "a genuinely different file appeared here" (a
+                # real conflict) from "our own earlier revert attempt already
+                # restored this from backup, then failed on the next step" (a
+                # resumable retry) — only the former should block reverting.
+                # Without this, a revert that partially succeeded (original
+                # restored, but removing the renamed file failed) could never
+                # be retried: every retry would immediately refuse to proceed
+                # because of the very state its own prior attempt left behind.
+                if file_hash(item["original_path"]) != item["before_hash"]:
+                    raise ValueError("Original rename destination now exists; refusing to overwrite it")
             if not item["uses_cad"] and (current.with_suffix(".dwl").exists() or current.with_suffix(".dwl2").exists()):
                 raise ValueError("Close the renamed drawing before deciding this changeset")
 
@@ -215,10 +241,19 @@ class ChangeManager:
             for item in change["files"]:
                 original, current = Path(item["original_path"]), Path(item["current_path"])
                 temporary = original.with_name(f".{original.name}.{uuid4().hex}.restore")
+                # Resumable: if a prior revert attempt already restored
+                # `original` from the backup but then failed before removing
+                # `current` (e.g. a transient PermissionError), a retry must
+                # not re-copy the backup over an already-correct `original` —
+                # only finish the remaining step. `_check_files` above already
+                # verified `original`'s hash matches `before_hash` whenever it
+                # exists at this point, so this is safe, not just optimistic.
+                already_restored = original.exists() and original != current
                 try:
-                    shutil.copy2(item["backup_path"], temporary)
-                    os.replace(temporary, original)
-                    if current != original:
+                    if not already_restored:
+                        shutil.copy2(item["backup_path"], temporary)
+                        os.replace(temporary, original)
+                    if current != original and current.exists():
                         current.unlink()
                 finally:
                     temporary.unlink(missing_ok=True)

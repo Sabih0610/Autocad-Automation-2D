@@ -3,6 +3,7 @@ import pytest
 from pathlib import Path
 from src.cad.scanner import scan_project, list_drawings
 from src.cad.extractor import DXFExtractor
+from src.cad.extractor.base import RelationshipRecord
 from src.storage.database import connection
 from src.storage.entity_repository import find_by_tag, get_entity, TAG_QUERY, store_snapshot
 from src.storage.project_repository import register_project
@@ -115,3 +116,44 @@ def test_bad_snapshot_rolls_back_and_scan_errors_hide_stale_index(tmp_path):
     path.write_text("corrupted")
     scan_project(project, max_workers=1)
     assert find_by_tag(project, "P-101") == []
+
+
+def test_relationship_with_unknown_target_handle_raises_descriptive_value_error(tmp_path):
+    """Every other malformed-snapshot case (an unknown geometry handle, an
+    invalid bounding box) already raised a descriptive ValueError. A
+    relationship naming a handle absent from `snapshot.entities` fell
+    through to a raw `ids[relation.target_handle]` KeyError instead."""
+    path = tmp_path / "a.dxf"
+    make_dxf(path)
+    project = register_project("Plant", str(tmp_path))
+    scan_project(project, max_workers=1)
+    drawing = list_drawings(project)[0]
+    snapshot = DXFExtractor().extract(path)
+    snapshot.relationships.append(
+        RelationshipRecord("not-a-real-handle", "connected_to", "also-not-real"))
+    with pytest.raises(ValueError, match="unknown entity"):
+        with connection() as conn:
+            store_snapshot(conn, drawing["drawing_id"], snapshot)
+    assert len(find_by_tag(project, "P-101")) == 1  # rolled back; original index untouched
+
+
+def test_whitespace_only_tags_are_not_cross_linked_as_the_same_component(tmp_path):
+    """`if not entity.tag: continue` skips None/"" but a whitespace-only
+    tag like "   " is truthy in Python, so it reached the cross-drawing
+    tag-match query and could spuriously link two unrelated untagged-in-
+    practice entities as `represented_in` the same component."""
+    for name in ("one.dxf", "two.dxf"):
+        path = tmp_path / name
+        doc = ezdxf.new()
+        doc.units = 4
+        doc.appids.new("AUTOCAD_AI")
+        line = doc.modelspace().add_line((0, 0, 0), (100, 0, 0))
+        line.set_xdata("AUTOCAD_AI", [(1000, "TAG=   ")])
+        doc.saveas(path)
+    project = register_project("Plant", str(tmp_path))
+    scan_project(project, max_workers=1)
+    with connection() as conn:
+        assert conn.execute("SELECT count(*) FROM entities WHERE tag=?", ("   ",)).fetchone()[0] == 2
+        represented_in = conn.execute(
+            "SELECT count(*) FROM relationships WHERE relationship_type='represented_in'").fetchone()[0]
+    assert represented_in == 0

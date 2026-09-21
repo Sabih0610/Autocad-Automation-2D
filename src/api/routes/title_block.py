@@ -1,3 +1,4 @@
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -10,20 +11,31 @@ from src.api.schemas import TitleBlockUpdateRequest
 
 router = APIRouter(prefix="/api", tags=["title-block"])
 
+# Guards `_temporary_module_settings` below. Without this, two concurrent
+# requests each overwrite the same module-level constants on `use_case` —
+# request A can observe request B's overrides mid-flight (e.g. B's title
+# updates get written using A's DRAWINGS_FOLDER/UPDATES), and whichever
+# request's `finally` runs last "restores" its own originals over the
+# other's still-in-flight state. Serializing the whole monkey-patch→call→
+# restore critical section removes the race without touching the use_case
+# module itself (still respecting the original Phase 7 constraint).
+_SETTINGS_LOCK = threading.Lock()
+
 
 @contextmanager
 def _temporary_module_settings(module: Any, **overrides: Any):
     # Phase 7 must wrap the existing module-level constants without editing the
     # use case itself. Override attributes on the imported module object only,
     # then restore them in finally so one request cannot leak into the next.
-    originals = {name: getattr(module, name) for name in overrides}
-    try:
-        for name, value in overrides.items():
-            setattr(module, name, value)
-        yield module
-    finally:
-        for name, value in originals.items():
-            setattr(module, name, value)
+    with _SETTINGS_LOCK:
+        originals = {name: getattr(module, name) for name in overrides}
+        try:
+            for name, value in overrides.items():
+                setattr(module, name, value)
+            yield module
+        finally:
+            for name, value in originals.items():
+                setattr(module, name, value)
 
 
 def _summarize_results(results: list[dict[str, Any]]) -> dict[str, int]:

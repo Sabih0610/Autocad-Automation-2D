@@ -487,6 +487,14 @@ def cad3d_approve(request: CAD3DApproveRequest):
     if scene_state_error is not None:
         response["scene_state_error"] = scene_state_error
 
+    if response["ok"]:
+        # A successful approve must consume its token — without this, the
+        # exact same 3D scene could be re-executed into AutoCAD an
+        # unlimited number of times with one token, since `_CAD3D_CACHE`
+        # never expires entries on its own. A failed attempt (ok=False)
+        # deliberately keeps the token so the caller can retry.
+        _CAD3D_CACHE.pop(request.token, None)
+
     return {
         **response,
     }

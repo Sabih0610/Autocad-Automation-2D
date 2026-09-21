@@ -1,3 +1,4 @@
+import sqlite3
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from src.cad.changes import ChangeManager, get_change_set
@@ -23,7 +24,7 @@ def respond(call):
         return call()
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
-    except (ValueError, OSError, ValidationError) as exc:
+    except (ValueError, OSError, sqlite3.IntegrityError, sqlite3.OperationalError, ValidationError) as exc:
         raise HTTPException(409, str(exc)) from exc
 
 

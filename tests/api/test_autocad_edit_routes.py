@@ -278,6 +278,21 @@ def test_target_dwg_path_is_passed_to_execute_edit_plan(client, monkeypatch) -> 
     assert captured["inspection_target"] == r"E:\RC-Projects\test.dwg"
 
 
+def test_empty_target_dwg_path_is_not_silently_dropped(client, monkeypatch) -> None:
+    """An explicitly-sent empty `target_dwg_path` must still reach the
+    inspector rather than being silently treated the same as "no target
+    given" and falling back to whatever's currently active in AutoCAD."""
+    captured = _patch_edit_stack(monkeypatch)
+
+    response = client.post(
+        "/api/autocad/edit",
+        json={"prompt": "delete text", "target_dwg_path": ""},
+    )
+
+    assert response.status_code == 200
+    assert captured["inspection_target"] == ""
+
+
 def test_inspector_autocad_not_running_returns_503(client, monkeypatch) -> None:
     _patch_edit_stack(
         monkeypatch,

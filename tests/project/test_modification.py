@@ -10,6 +10,7 @@ from src.storage.entity_repository import find_by_tag
 from src.framework.commands.schema import validate_command_sequence
 from src.framework.commands.operation_schema import validate_operation
 from src.framework.commands import modification_executor as engine
+from tests.project import fake_cad
 from tests.project.fake_cad import Acad, Document
 from tests.project.test_extractor import make_dxf
 
@@ -66,13 +67,28 @@ def test_operation_schema_rejects_unsafe_or_ambiguous_fields(operation):
         validate_operation(dict(operation, target_dwg_path="C:/a.dwg"))
 
 
-def test_command_schema_accepts_structured_operation_and_requires_target(drawing):
+def test_legacy_command_schema_rejects_structured_operations(drawing):
+    """The legacy creation/edit command schema must stay independent of the new
+    structured-operation schema. RESIZE_COMPONENT and friends are validated only
+    through `validate_operation`/`OPERATION_SCHEMA`, dispatched via
+    `modification_executor`; they must never be accepted inside a Mode 2
+    `commands` envelope (validated via `validate_command_sequence`), since the
+    legacy executor has no handler for them. This previously regressed because
+    `schema.py` mutated the shared `COMMAND_SCHEMA`/`_COMMAND_TYPES` objects at
+    import time to splice the operation types in — see schema.py's module
+    docstring/comment for the fix.
+    """
     path, handle, _ = drawing
     op = resize(path, handle, delta_mm=50)
     envelope = dict(schema_version="1.0", summary="Resize", assumptions=[], commands=[op])
-    assert validate_command_sequence(envelope) == []
+    assert validate_command_sequence(envelope) != []
+
+    # The operation itself must still validate correctly through the proper,
+    # separate structured-operation path, with or without an explicit target.
+    assert validate_operation(op) == op
     del op["target_dwg_path"]
-    assert validate_command_sequence(envelope)
+    with pytest.raises(ValidationError):
+        validate_operation(op)
 
 
 @pytest.mark.parametrize("operation", [
@@ -135,7 +151,7 @@ def test_property_layer_document_and_attribute_edits(drawing):
     assert len(find_by_tag(project, "V-102")) == 1
 
 
-def test_rename_is_filesystem_only_and_rejects_open_file(drawing, monkeypatch):
+def test_rename_is_filesystem_only_and_rejects_genuinely_open_file(drawing, monkeypatch):
     path, handle, project = drawing
     def forbidden(*args):
         pytest.fail("Rename may not contact AutoCAD")
@@ -143,9 +159,38 @@ def test_rename_is_filesystem_only_and_rejects_open_file(drawing, monkeypatch):
     op = dict(command="RENAME_FILE", target_dwg_path=str(path), new_name="renamed.dxf")
     from src.cad.session import mark_open
     mark_open(str(path), True)
+    # A real `.dwl` lock file is what makes this "genuinely open" rather than
+    # just our own bookkeeping flag — see
+    # test_rename_reconciles_stale_open_flag_when_no_lock_file_exists for the
+    # case where the flag is stale (no lock file at all) and must not block.
+    path.with_suffix(".dwl").write_bytes(b"")
     with pytest.raises(ValueError, match="Close"):
         engine.execute_operation(op)
+    path.with_suffix(".dwl").unlink()
     mark_open(str(path), False)
+    original = path.read_bytes()
+    result = engine.execute_operation(op)
+    assert not path.exists()
+    assert (path.parent / "renamed.dxf").read_bytes() == original
+    assert result["changes"][0]["field"] == "path"
+
+
+def test_rename_reconciles_stale_open_flag_when_no_lock_file_exists(drawing):
+    """`is_open` only ever gets cleared by a changeset revert (or manually,
+    as the sibling test does) — a normal successful edit leaves the drawing
+    open in AutoCAD by design, and an external close (the user closing it
+    directly in AutoCAD) has no way to notify this app at all. Without
+    reconciliation, `is_open` could get stuck at 1 forever, permanently
+    blocking every future rename. This proves it self-heals using AutoCAD's
+    own `.dwl`/`.dwl2` lock files as the more reliable signal, without
+    anyone having to call `mark_open(path, False)` manually."""
+    path, handle, _ = drawing
+    from src.cad.session import mark_open
+    mark_open(str(path), True)
+    assert not path.with_suffix(".dwl").exists()
+    assert not path.with_suffix(".dwl2").exists()
+
+    op = dict(command="RENAME_FILE", target_dwg_path=str(path), new_name="renamed.dxf")
     original = path.read_bytes()
     result = engine.execute_operation(op)
     assert not path.exists()
@@ -200,9 +245,173 @@ def test_failed_save_rolls_back_live_assignments(drawing, monkeypatch):
     assert path.read_bytes() == original
 
 
+def test_transient_com_busy_error_is_retried_not_fatal(drawing, monkeypatch):
+    """The legacy executor (executor.py) already retries transient "AutoCAD
+    busy" COM errors; this module previously had none at all, so a purely
+    transient failure (one that would have succeeded on the very next
+    attempt) aborted the whole operation and triggered a full rollback
+    instead of just trying again."""
+    path, handle, _ = drawing
+    doc = Document(path)
+
+    real_setattr = fake_cad.Entity.__setattr__
+    state = {"end_point_attempts": 0}
+
+    def flaky_setattr(self, name, value):
+        if name == "EndPoint":
+            state["end_point_attempts"] += 1
+            if state["end_point_attempts"] == 1:
+                raise AttributeError("simulated transient AutoCAD-busy error")
+        real_setattr(self, name, value)
+
+    monkeypatch.setattr(fake_cad.Entity, "__setattr__", flaky_setattr)
+
+    result = engine.execute_operation(resize(path, handle, delta_mm=50), acad=Acad([doc]))
+    assert state["end_point_attempts"] == 2
+    assert result["changes"][0]["after"] == (1050, 0, 0)
+
+
 def test_missing_target_and_nonfinite_values_rejected_before_com(drawing):
     path, handle, _ = drawing
     with pytest.raises(ValueError, match="absolute"):
         engine.execute_operation(resize("relative.dwg", handle, delta_mm=1), acad=Acad())
+
+
+def test_set_entity_property_save_lie_is_caught_by_reextraction(drawing):
+    """Previously, only RESIZE_COMPONENT re-verified the saved file against
+    what was intended — every other operation only checked that extraction
+    *succeeded*, not that the value actually persisted. Simulate a COM
+    `Save()` that reports success without writing anything (a real failure
+    mode this project's own docs already flag as possible) and confirm a
+    color edit is now caught the same way a bad resize already was."""
+    path, handle, _ = drawing
+    doc = Document(path)
+    original_save = doc.Save
+    doc.Save = lambda: None  # "succeeds" without calling self.data.saveas(...)
+    try:
+        with pytest.raises(ValueError, match="did not confirm the property change"):
+            engine.execute_operation(
+                dict(command="SET_ENTITY_PROPERTY", target_dwg_path=str(path), handle=handle,
+                     property="color", value=3),
+                acad=Acad([doc]), verify_extractor=DXFExtractor(),
+            )
+    finally:
+        doc.Save = original_save
+
+
+def test_set_entity_property_verified_when_save_genuinely_persists(drawing):
+    path, handle, _ = drawing
+    result = engine.execute_operation(
+        dict(command="SET_ENTITY_PROPERTY", target_dwg_path=str(path), handle=handle,
+             property="color", value=3),
+        acad=Acad([Document(path)]), verify_extractor=DXFExtractor(),
+    )
+    assert result["verified_by_extraction"] is True
+    assert DXFExtractor().extract_properties(path)[handle]["color"] == 3
+
+
+def test_layer_property_verification_tolerates_autocad_case_normalization(drawing, monkeypatch):
+    """AutoCAD layer/linetype names are case-insensitive but case-preserving.
+    If AutoCAD echoes back an existing layer's own stored casing rather than
+    the exact casing an assignment happened to send, that must not be
+    mistaken for AutoCAD having silently dropped the edit."""
+    path, handle, project = drawing
+    data = ezdxf.readfile(path)
+    data.layers.new("Pipes")
+    data.saveas(path)
+    scan_project(project, max_workers=1)
+    doc = Document(path)
+
+    real_getattr = fake_cad.Entity.__getattr__
+
+    def case_flipping_getattr(self, name):
+        if name == "Layer":
+            return "Pipes"  # different case than the "PIPES" this test assigns
+        return real_getattr(self, name)
+
+    monkeypatch.setattr(fake_cad.Entity, "__getattr__", case_flipping_getattr)
+
+    result = engine.execute_operation(
+        dict(command="SET_ENTITY_PROPERTY", target_dwg_path=str(path), handle=handle,
+             property="layer", value="PIPES"),
+        acad=Acad([doc]),
+    )
+    assert result["changes"][0]["after"] == "PIPES"
+
+
+def test_radius_resize_tolerates_com_normal_floating_point_noise(drawing, monkeypatch):
+    """A legitimate XY-plane circle/arc must not be spuriously rejected
+    because COM returned a Normal vector like (0.0, 0.0, 0.9999999999999998)
+    instead of exactly (0.0, 0.0, 1.0) — a real, observed floating-point
+    representation, not a hypothetical one."""
+    path, _, project = drawing
+    doc = ezdxf.readfile(path)
+    circle = doc.modelspace().add_circle((500, 500), 10)
+    doc.saveas(path)
+    scan_project(project, max_workers=1)
+
+    real_getattr = fake_cad.Entity.__getattr__
+
+    def noisy_normal_getattr(self, name):
+        if name == "Normal":
+            return (0.0, 0.0, 0.9999999999999998)
+        return real_getattr(self, name)
+
+    monkeypatch.setattr(fake_cad.Entity, "__getattr__", noisy_normal_getattr)
+
+    result = engine.execute_operation(
+        dict(command="RESIZE_COMPONENT", target_dwg_path=str(path), handle=circle.dxf.handle,
+             dimension="radius", delta_mm=5),
+        acad=Acad([Document(path)]),
+    )
+    assert result["changes"][0]["after"] == 15
+
+
+def test_rollback_failure_does_not_mask_original_error_or_abort_remaining_rollback(drawing, monkeypatch):
+    """If a second, unrelated COM failure happens while rolling back a
+    multi-assignment edit (e.g. rolling back a connected valve's position
+    after the pipe's own resize+save failed), the rollback must still
+    attempt every other change, and the caller must still learn about BOTH
+    the original failure and the rollback failure — not have the rollback
+    failure silently swallow or replace the original one, and not abort
+    partway through rolling back the rest, leaving other changes live in
+    the unsaved document."""
+    path, handle, _ = drawing
+    doc = Document(path)
+
+    state = {"save_failed": False, "rollback_already_failed_once": False}
+
+    def fail_save():
+        state["save_failed"] = True
+        raise RuntimeError("save failed")
+    monkeypatch.setattr(doc, "Save", fail_save)
+
+    real_setattr = fake_cad.Entity.__setattr__
+
+    def flaky_setattr(self, name, value):
+        # Fail exactly once, and only on an InsertionPoint assignment made
+        # AFTER Save() has already failed — i.e. during rollback, regardless
+        # of how many InsertionPoint assignments (valve + its attribute, if
+        # any) happen during the forward pass first.
+        if name == "InsertionPoint" and state["save_failed"] and not state["rollback_already_failed_once"]:
+            state["rollback_already_failed_once"] = True
+            raise RuntimeError("rollback also failed")
+        real_setattr(self, name, value)
+
+    monkeypatch.setattr(fake_cad.Entity, "__setattr__", flaky_setattr)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        engine.execute_operation(resize(path, handle, delta_mm=50), acad=Acad([doc]))
+
+    message = str(excinfo.value)
+    assert "save failed" in message
+    assert "rollback also failed" in message
+    assert excinfo.value.__cause__ is not None
+    assert "save failed" in str(excinfo.value.__cause__)
+    # The pipe's own EndPoint rollback (reversed(applied) processes it AFTER
+    # the valve's InsertionPoint) must still have run despite the valve
+    # rollback failing first — proving one rollback failure doesn't abort
+    # the rest.
+    assert tuple(doc.data.entitydb[handle].dxf.end) == (1000, 0, 0)
     with pytest.raises(ValueError):
         engine.execute_operation(resize(path, handle, delta_mm=float("inf")), acad=Acad())
