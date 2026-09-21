@@ -119,16 +119,18 @@ CREATE TABLE IF NOT EXISTS job_change_sets (
     job_id TEXT PRIMARY KEY REFERENCES jobs_multi_file(job_id),
     change_set_id TEXT NOT NULL REFERENCES change_sets(change_set_id)
 );
+-- drawing_id is nullable: a file-level changeset covers a drawing that is not
+-- registered in any project, and is identified by original_path instead.
 CREATE TABLE IF NOT EXISTS change_set_files (
     change_set_id TEXT NOT NULL REFERENCES change_sets(change_set_id),
-    drawing_id TEXT NOT NULL REFERENCES drawings(drawing_id),
+    drawing_id TEXT REFERENCES drawings(drawing_id),
     original_path TEXT NOT NULL,
     current_path TEXT NOT NULL,
     backup_path TEXT NOT NULL,
     before_hash TEXT NOT NULL,
     after_hash TEXT,
     uses_cad INTEGER NOT NULL DEFAULT 1,
-    PRIMARY KEY(change_set_id,drawing_id)
+    PRIMARY KEY(change_set_id,original_path)
 );
 INSERT OR IGNORE INTO spatial_version VALUES (1,0);
 -- entity_geometry rows are always written via delete-then-insert, never

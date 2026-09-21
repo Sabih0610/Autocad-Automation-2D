@@ -46,3 +46,13 @@ def keep(change_id: str):
 @router.post("/{change_id}/revert")
 def revert(change_id: str):
     return respond(lambda: WRITE_QUEUE.run(manager().revert, change_id))
+
+
+@router.post("/{change_id}/discard")
+def discard(change_id: str):
+    """Release a changeset that can no longer be kept or reverted.
+
+    Leaves every file untouched, including the backup. Its only effect is to
+    stop this changeset blocking further edits to its drawings.
+    """
+    return respond(lambda: WRITE_QUEUE.run(manager().discard, change_id))

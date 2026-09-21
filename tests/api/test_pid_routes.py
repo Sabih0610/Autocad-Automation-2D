@@ -262,7 +262,7 @@ def test_pid_approve_with_token_calls_executor(client, monkeypatch) -> None:
     token = response.json()["token"]
     _patch_executor(monkeypatch, captured)
 
-    approve_response = client.post("/api/pid/approve", json={"token": token})
+    approve_response = client.post("/api/pid/approve", json={"token": token, "use_active_document": True})
 
     assert approve_response.status_code == 200
     assert len(captured["execute_calls"]) == 1
@@ -275,7 +275,7 @@ def test_pid_approve_response_includes_execution_result(client, monkeypatch) -> 
     token = response.json()["token"]
     _patch_executor(monkeypatch, captured)
 
-    approve_response = client.post("/api/pid/approve", json={"token": token})
+    approve_response = client.post("/api/pid/approve", json={"token": token, "use_active_document": True})
 
     data = approve_response.json()
     assert data["execution_result"] == FAKE_EXECUTION_RESULT
@@ -292,11 +292,11 @@ def test_pid_approve_token_is_consumed_on_success_and_cannot_replay(client, monk
     token = response.json()["token"]
     _patch_executor(monkeypatch, captured)
 
-    first = client.post("/api/pid/approve", json={"token": token})
+    first = client.post("/api/pid/approve", json={"token": token, "use_active_document": True})
     assert first.status_code == 200
     assert len(captured["execute_calls"]) == 1
 
-    replay = client.post("/api/pid/approve", json={"token": token})
+    replay = client.post("/api/pid/approve", json={"token": token, "use_active_document": True})
     assert replay.status_code == 404
     assert len(captured["execute_calls"]) == 1  # not executed a second time
 
@@ -304,7 +304,7 @@ def test_pid_approve_token_is_consumed_on_success_and_cannot_replay(client, monk
 def test_pid_approve_missing_token_returns_404(client, monkeypatch) -> None:
     _patch_executor(monkeypatch)
 
-    response = client.post("/api/pid/approve", json={"token": "missing"})
+    response = client.post("/api/pid/approve", json={"token": "missing", "use_active_document": True})
 
     assert response.status_code == 404
 
@@ -319,7 +319,7 @@ def test_pid_approve_expired_token_returns_404(client, monkeypatch) -> None:
     )
     _patch_executor(monkeypatch, captured)
 
-    approve = client.post("/api/pid/approve", json={"token": token})
+    approve = client.post("/api/pid/approve", json={"token": token, "use_active_document": True})
 
     assert approve.status_code == 404
     assert token not in pid_routes._PID_CACHE
@@ -336,7 +336,7 @@ def test_pid_approve_token_within_ttl_still_works(client, monkeypatch) -> None:
     )
     _patch_executor(monkeypatch, captured)
 
-    approve = client.post("/api/pid/approve", json={"token": token})
+    approve = client.post("/api/pid/approve", json={"token": token, "use_active_document": True})
 
     assert approve.status_code == 200
     assert len(captured["execute_calls"]) == 1
@@ -357,14 +357,14 @@ def test_pid_purge_removes_expired_token_without_evicting_live_token(
     _patch_executor(monkeypatch, captured)
 
     expired_approve = client.post(
-        "/api/pid/approve", json={"token": expired_token}
+        "/api/pid/approve", json={"token": expired_token, "use_active_document": True}
     )
 
     assert expired_approve.status_code == 404
     assert expired_token not in pid_routes._PID_CACHE
     assert live_token in pid_routes._PID_CACHE
 
-    live_approve = client.post("/api/pid/approve", json={"token": live_token})
+    live_approve = client.post("/api/pid/approve", json={"token": live_token, "use_active_document": True})
     assert live_approve.status_code == 200
     assert len(captured["execute_calls"]) == 1
 
@@ -374,7 +374,7 @@ def test_pid_approve_passes_save_flag_to_executor(client, monkeypatch) -> None:
     token = response.json()["token"]
     _patch_executor(monkeypatch, captured)
 
-    approve_response = client.post("/api/pid/approve", json={"token": token, "save": True})
+    approve_response = client.post("/api/pid/approve", json={"token": token, "save": True, "use_active_document": True})
 
     assert approve_response.status_code == 200
     assert captured["execute_calls"][0]["save"] is True
@@ -399,7 +399,7 @@ def test_pid_approve_autocad_not_running_returns_503(client, monkeypatch) -> Non
     token = response.json()["token"]
     _patch_executor(monkeypatch, captured, error=AutoCADNotRunningError("missing"))
 
-    approve_response = client.post("/api/pid/approve", json={"token": token})
+    approve_response = client.post("/api/pid/approve", json={"token": token, "use_active_document": True})
 
     assert approve_response.status_code == 503
     assert token in pid_routes._PID_CACHE
@@ -411,7 +411,7 @@ def test_pid_approve_works_with_fallback_generated_token(client, monkeypatch) ->
     token = response.json()["token"]
     _patch_executor(monkeypatch, captured)
 
-    approve_response = client.post("/api/pid/approve", json={"token": token})
+    approve_response = client.post("/api/pid/approve", json={"token": token, "use_active_document": True})
 
     assert approve_response.status_code == 200
     assert approve_response.json()["ok"] is True

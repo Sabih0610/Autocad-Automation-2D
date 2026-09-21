@@ -14,6 +14,7 @@ from src.ai.cad3d_edit_planner import (
     plan_cad3d_edit_resilient,
 )
 from src.ai.cad3d_scene_planner import plan_cad3d_scene_resilient
+from src.api.routes._revertible import require_explicit_target, run_revertible
 from src.api.schemas import CAD3DApproveRequest, CAD3DEditRequest, CAD3DGenerateRequest
 from src.framework.cad3d.autocad_3d_executor import (
     AutoCAD3DExecutionError,
@@ -361,8 +362,14 @@ def cad3d_edit(request: CAD3DEditRequest):
     scene_state_updated = False
     scene_status = "generated"
     expanded_scene = None
+    change_set_id = None
+    # An edit with execute=false only stores the edited scene; nothing reaches
+    # the drawing, so there is nothing to revert.
+    change_set_skipped_reason = None if request.execute else "No changeset: execute=false, so the drawing was not modified."
 
     if request.execute:
+        require_explicit_target(request.target_dwg_path, request.use_active_document)
+
         try:
             expanded_scene = expand_pipe_connections(edited_scene)
         except Exception:
@@ -371,11 +378,16 @@ def cad3d_edit(request: CAD3DEditRequest):
         try:
             pythoncom.CoInitialize()
             try:
-                execution_result = execute_cad3d_scene(
-                    edited_scene,
-                    target_dwg_path=request.target_dwg_path,
+                execution_result, change_set_id, change_set_skipped_reason = run_revertible(
+                    request.target_dwg_path,
+                    f"CAD3D edit: {prompt}",
+                    lambda: execute_cad3d_scene(
+                        edited_scene,
+                        target_dwg_path=request.target_dwg_path,
+                        save=request.save,
+                        zoom_extents=True,
+                    ),
                     save=request.save,
-                    zoom_extents=True,
                 )
             finally:
                 pythoncom.CoUninitialize()
@@ -431,6 +443,8 @@ def cad3d_edit(request: CAD3DEditRequest):
         "scene_status": scene_status,
         "executed": executed,
         "execution_result": execution_result,
+        "change_set_id": change_set_id,
+        "change_set_skipped_reason": change_set_skipped_reason,
     }
     if scene_state_error is not None:
         response["scene_state_error"] = scene_state_error
@@ -448,6 +462,8 @@ def cad3d_approve(request: CAD3DApproveRequest):
             detail="3D CAD token was not found or has expired. Generate again.",
         )
 
+    require_explicit_target(request.target_dwg_path, request.use_active_document)
+
     scene_data = cached["scene_data"]
     expanded_scene = None
     try:
@@ -458,11 +474,16 @@ def cad3d_approve(request: CAD3DApproveRequest):
     try:
         pythoncom.CoInitialize()
         try:
-            result = execute_cad3d_scene(
-                scene_data,
-                target_dwg_path=request.target_dwg_path,
+            result, change_set_id, change_set_skipped_reason = run_revertible(
+                request.target_dwg_path,
+                f"CAD3D: {scene_data.get('title') or 'generated scene'}",
+                lambda: execute_cad3d_scene(
+                    scene_data,
+                    target_dwg_path=request.target_dwg_path,
+                    save=request.save,
+                    zoom_extents=True,
+                ),
                 save=request.save,
-                zoom_extents=True,
             )
         finally:
             pythoncom.CoUninitialize()
@@ -512,6 +533,8 @@ def cad3d_approve(request: CAD3DApproveRequest):
         "example_name": cached["example_name"],
         "title": scene_data.get("title"),
         "component_count": len(scene_data["components"]),
+        "change_set_id": change_set_id,
+        "change_set_skipped_reason": change_set_skipped_reason,
     }
     if scene_state_error is not None:
         response["scene_state_error"] = scene_state_error

@@ -390,7 +390,7 @@ def test_approve_with_valid_token_calls_executor_and_returns_result(client, monk
     token = response.json()["token"]
     _patch_executor(monkeypatch, captured)
 
-    approve_response = client.post("/api/sketch/approve", json={"token": token})
+    approve_response = client.post("/api/sketch/approve", json={"token": token, "use_active_document": True})
 
     data = approve_response.json()
     assert approve_response.status_code == 200
@@ -408,7 +408,7 @@ def test_token_cache_stores_orchestrated_command_sequence_and_approve_executes_i
     assert sketch_routes._token_cache[token]["repair_history"] == FAKE_ORCHESTRATED_RESULT["repair_history"]
 
     _patch_executor(monkeypatch, captured)
-    approve_response = client.post("/api/sketch/approve", json={"token": token})
+    approve_response = client.post("/api/sketch/approve", json={"token": token, "use_active_document": True})
 
     assert approve_response.status_code == 200
     assert captured["execute_calls"][0]["command_sequence"] == FAKE_COMMAND_SEQUENCE
@@ -417,7 +417,7 @@ def test_token_cache_stores_orchestrated_command_sequence_and_approve_executes_i
 def test_approve_with_unknown_token_returns_404(client, monkeypatch) -> None:
     _patch_executor(monkeypatch)
 
-    response = client.post("/api/sketch/approve", json={"token": "missing"})
+    response = client.post("/api/sketch/approve", json={"token": "missing", "use_active_document": True})
 
     assert response.status_code == 404
 
@@ -429,28 +429,35 @@ def test_approve_passes_save_false_to_executor(client, monkeypatch) -> None:
 
     approve_response = client.post(
         "/api/sketch/approve",
-        json={"token": token, "save": False},
+        json={"token": token, "save": False, "use_active_document": True},
     )
 
     assert approve_response.status_code == 200
     assert captured["execute_calls"][0]["save"] is False
 
 
-def test_approve_passes_target_dwg_path_to_executor(client, monkeypatch) -> None:
+def test_approve_passes_target_dwg_path_to_executor(client, monkeypatch, tmp_path) -> None:
     response, captured = _generate(client, monkeypatch)
     token = response.json()["token"]
     _patch_executor(monkeypatch, captured)
+
+    # A real file: an approve with save=true now wraps the write in a
+    # file-level changeset, which has to back the drawing up first and so
+    # cannot accept a path that does not exist.
+    target = tmp_path / "test.dwg"
+    target.write_bytes(b"")
 
     approve_response = client.post(
         "/api/sketch/approve",
         json={
             "token": token,
-            "target_dwg_path": r"E:\RC-Projects\test.dwg",
+            "target_dwg_path": str(target),
         },
     )
 
     assert approve_response.status_code == 200
-    assert captured["execute_calls"][0]["target_dwg_path"] == r"E:\RC-Projects\test.dwg"
+    assert captured["execute_calls"][0]["target_dwg_path"] == str(target)
+    assert approve_response.json()["change_set_id"]
 
 
 def test_autocad_not_running_returns_503_and_keeps_token_for_retry(client, monkeypatch) -> None:
@@ -458,13 +465,13 @@ def test_autocad_not_running_returns_503_and_keeps_token_for_retry(client, monke
     token = response.json()["token"]
     _patch_executor(monkeypatch, captured, error=AutoCADNotRunningError("AutoCAD missing"))
 
-    first_approve = client.post("/api/sketch/approve", json={"token": token})
+    first_approve = client.post("/api/sketch/approve", json={"token": token, "use_active_document": True})
 
     assert first_approve.status_code == 503
     assert token in sketch_routes._token_cache
 
     _patch_executor(monkeypatch, captured, error=None)
-    second_approve = client.post("/api/sketch/approve", json={"token": token})
+    second_approve = client.post("/api/sketch/approve", json={"token": token, "use_active_document": True})
 
     assert second_approve.status_code == 200
     assert second_approve.json()["ok"] is True

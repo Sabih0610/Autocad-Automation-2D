@@ -4,6 +4,7 @@ from pathlib import Path
 
 from src.logging import db
 from .spatial import ensure_spatial
+from .changeset_schema import ensure_changeset_file_targets
 from .relationship_schema import ensure_relationship_targets
 
 SCHEMA = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8-sig")
@@ -43,6 +44,7 @@ def connection():
         # unlike SCHEMA there's no expensive replay to skip, and skipping
         # the call entirely would stop them from ever self-healing.
         ensure_relationship_targets(conn)
+        ensure_changeset_file_targets(conn)
         ensure_spatial(conn)
         # Cleanup for objects an older version of this code could have left
         # behind on disk: a case-sensitive tag index made redundant by
@@ -56,6 +58,16 @@ def connection():
         conn.execute("DROP INDEX IF EXISTS idx_entity_tag")
         conn.execute("DROP TRIGGER IF EXISTS geometry_version_update")
         conn.execute("DROP TRIGGER IF EXISTS spatial_update")
+        # Hand the caller a connection with no transaction already open.
+        # Initialising a brand-new database runs `ensure_spatial`'s backfill
+        # INSERT, which implicitly opens one; a caller that then issues its
+        # own `BEGIN IMMEDIATE` — as ChangeManager.apply and apply_file_edit
+        # both do to claim their targets — failed with "cannot start a
+        # transaction within a transaction". It only ever bit whichever call
+        # happened to be the first to touch a fresh database, which is why it
+        # stayed hidden.
+        if conn.in_transaction:
+            conn.commit()
         with conn:
             yield conn
     finally:

@@ -172,7 +172,7 @@ def test_edit_with_valid_prompt_auto_execute_returns_200_and_calls_stack(client,
 
     response = client.post(
         "/api/autocad/edit",
-        json={"prompt": "delete the title text"},
+        json={"prompt": "delete the title text", "use_active_document": True},
     )
 
     assert response.status_code == 200
@@ -191,7 +191,7 @@ def test_edit_response_includes_expected_fields(client, monkeypatch) -> None:
 
     response = client.post(
         "/api/autocad/edit",
-        json={"prompt": "delete the title text"},
+        json={"prompt": "delete the title text", "use_active_document": True},
     )
 
     data = response.json()
@@ -208,7 +208,7 @@ def test_auto_execute_false_returns_edit_plan_without_calling_executor(client, m
 
     response = client.post(
         "/api/autocad/edit",
-        json={"prompt": "delete the title text", "auto_execute": False},
+        json={"prompt": "delete the title text", "auto_execute": False, "use_active_document": True},
     )
 
     data = response.json()
@@ -223,7 +223,7 @@ def test_auto_execute_false_returns_edit_plan_without_calling_executor(client, m
 def test_empty_prompt_returns_400(client, monkeypatch) -> None:
     _patch_edit_stack(monkeypatch)
 
-    response = client.post("/api/autocad/edit", json={"prompt": "   "})
+    response = client.post("/api/autocad/edit", json={"prompt": "   ", "use_active_document": True})
 
     assert response.status_code == 400
 
@@ -233,7 +233,7 @@ def test_invalid_max_entities_zero_returns_validation_error(client, monkeypatch)
 
     response = client.post(
         "/api/autocad/edit",
-        json={"prompt": "delete text", "max_entities": 0},
+        json={"prompt": "delete text", "max_entities": 0, "use_active_document": True},
     )
 
     assert response.status_code in {400, 422}
@@ -244,7 +244,7 @@ def test_invalid_max_entities_too_high_returns_validation_error(client, monkeypa
 
     response = client.post(
         "/api/autocad/edit",
-        json={"prompt": "delete text", "max_entities": 3000},
+        json={"prompt": "delete text", "max_entities": 3000, "use_active_document": True},
     )
 
     assert response.status_code in {400, 422}
@@ -255,7 +255,7 @@ def test_save_true_is_passed_to_execute_edit_plan(client, monkeypatch) -> None:
 
     response = client.post(
         "/api/autocad/edit",
-        json={"prompt": "delete text", "save": True},
+        json={"prompt": "delete text", "save": True, "use_active_document": True},
     )
 
     assert response.status_code == 200
@@ -301,7 +301,7 @@ def test_inspector_autocad_not_running_returns_503(client, monkeypatch) -> None:
 
     response = client.post(
         "/api/autocad/edit",
-        json={"prompt": "delete text"},
+        json={"prompt": "delete text", "use_active_document": True},
     )
 
     assert response.status_code == 503
@@ -319,7 +319,7 @@ def test_executor_autocad_not_running_returns_503(client, monkeypatch) -> None:
 
     response = client.post(
         "/api/autocad/edit",
-        json={"prompt": "delete text"},
+        json={"prompt": "delete text", "use_active_document": True},
     )
 
     assert response.status_code == 503
@@ -337,7 +337,7 @@ def test_edit_generator_value_error_returns_400(client, monkeypatch) -> None:
 
     response = client.post(
         "/api/autocad/edit",
-        json={"prompt": "change it"},
+        json={"prompt": "change it", "use_active_document": True},
     )
 
     assert response.status_code == 400
@@ -358,7 +358,7 @@ def test_executor_ok_false_returns_200_with_errors(client, monkeypatch) -> None:
 
     response = client.post(
         "/api/autocad/edit",
-        json={"prompt": "delete text"},
+        json={"prompt": "delete text", "use_active_document": True},
     )
 
     data = response.json()

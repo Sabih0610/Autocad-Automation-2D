@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.ai.edit_generator import generate_edit_plan
+from src.api.routes._revertible import require_explicit_target, run_revertible
 from src.framework.autocad.inspector import (
     inspect_active_drawing,
     summarize_drawing_state,
@@ -28,6 +29,7 @@ class AutoCADEditRequest(BaseModel):
     max_entities: int = Field(default=200, ge=1, le=2000)
     auto_execute: bool = True
     save: bool = False
+    use_active_document: bool = False
     target_dwg_path: str | None = None
 
 
@@ -58,11 +60,16 @@ def _execute_with_com(
 
     pythoncom.CoInitialize()
     try:
-        return execute_edit_plan(
-            edit_plan,
-            target_dwg_path=target_dwg_path,
+        return run_revertible(
+            target_dwg_path,
+            f"AutoCAD edit: {edit_plan.get('summary') or edit_plan.get('edit_intent') or 'live edit'}",
+            lambda: execute_edit_plan(
+                edit_plan,
+                target_dwg_path=target_dwg_path,
+                save=save,
+                zoom_extents=True,
+            ),
             save=save,
-            zoom_extents=True,
         )
     finally:
         pythoncom.CoUninitialize()
@@ -73,6 +80,9 @@ def edit_autocad_drawing(request: AutoCADEditRequest):
     prompt = request.prompt.strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+
+    if request.auto_execute:
+        require_explicit_target(request.target_dwg_path, request.use_active_document)
 
     try:
         inspection, inspection_summary = _inspect_with_com(request.max_entities, request.target_dwg_path)
@@ -110,7 +120,7 @@ def edit_autocad_drawing(request: AutoCADEditRequest):
         }
 
     try:
-        execution_result = _execute_with_com(
+        execution_result, change_set_id, change_set_skipped_reason = _execute_with_com(
             edit_plan,
             target_dwg_path=request.target_dwg_path,
             save=request.save,
@@ -135,4 +145,6 @@ def edit_autocad_drawing(request: AutoCADEditRequest):
         "entity_count_returned": inspection.get("entity_count_returned"),
         "edit_plan": edit_plan,
         "execution_result": execution_result,
+        "change_set_id": change_set_id,
+        "change_set_skipped_reason": change_set_skipped_reason,
     }

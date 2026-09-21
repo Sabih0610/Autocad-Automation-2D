@@ -151,9 +151,87 @@ class ChangeManager:
                     on_item(index, "error", str(exc))
             return get_change_set(change_id)
 
+    def apply_file_edit(self, paths, summary, execute):
+        """Wrap an arbitrary drawing write in a revertible changeset.
+
+        `apply` models per-entity structured operations against drawings
+        indexed in a project. The older workflows (sketch, P&ID, CAD3D,
+        vessel, place-symbol, autocad/edit) are additive command batches
+        against whatever file the user points at, which is usually in no
+        project at all — so they produced no changeset and could not be
+        reverted, which is why seven of eight mutating workflows had no undo.
+
+        This covers them at file granularity: back up, run `execute`, record
+        the resulting hash. Revert restores the backup. No per-entity detail
+        is recorded, deliberately — the goal is that every write can be undone,
+        not that every write is introspectable.
+
+        `paths` may be empty (an unsaved/untitled ActiveDocument has nothing to
+        back up); `execute` still runs and the result reports that no changeset
+        was created, rather than silently pretending one exists.
+        """
+        if not summary.strip():
+            raise ValueError("A changeset needs a summary")
+
+        targets = []
+        for raw in paths:
+            path = canonical_path(raw)
+            if not Path(path).is_file():
+                raise ValueError(f"Cannot back up a drawing that does not exist: {path}")
+            targets.append(path)
+
+        if not targets:
+            return execute(), None
+
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for path in targets:
+                conflict = conn.execute("""SELECT 1 FROM change_set_files f JOIN change_sets c ON c.change_set_id=f.change_set_id
+                    WHERE (f.original_path=? OR f.current_path=?) AND c.status IN ('applying','pending','error','reverting')""", (path, path)).fetchone()
+                if conflict:
+                    raise ValueError("Resolve the existing pending changeset for this drawing first")
+            change_id = uuid4().hex
+            conn.execute("INSERT INTO change_sets VALUES (?,?,?,'applying',?)", (change_id, None, summary, now()))
+            for path in targets:
+                before_hash = file_hash(path)
+                backup = backup_file(Path(path))
+                if file_hash(backup) != before_hash:
+                    raise ValueError("Drawing changed while creating the backup")
+                conn.execute("INSERT INTO change_set_files VALUES (?,NULL,?,?,?,?,NULL,1)",
+                             (change_id, path, path, str(backup), before_hash))
+
+        try:
+            result = execute()
+        except Exception as exc:
+            # Keep the changeset revertible: the write may have partially
+            # landed before raising, and the backup is the only way back.
+            for path in targets:
+                if Path(path).exists():
+                    self._record_file(change_id, None, path)
+            with connection() as conn:
+                conn.execute("UPDATE change_sets SET status='error' WHERE change_set_id=?", (change_id,))
+            self._validation(change_id, False, f"{type(exc).__name__}: {exc}")
+            raise
+
+        for path in targets:
+            if Path(path).exists():
+                self._record_file(change_id, None, path)
+        self._validation(change_id, True, "File-level changeset recorded; backup verified against the pre-edit file")
+        with connection() as conn:
+            conn.execute("UPDATE change_sets SET status='pending' WHERE change_set_id=?", (change_id,))
+        return result, change_id
+
     @staticmethod
     def _record_file(change_id, drawing_id, path):
         with connection() as conn:
+            if drawing_id is None:
+                # A file-level changeset has no drawing row, so it is keyed by
+                # path. Its current_path never moves (only RENAME_FILE moves a
+                # file, and that is a project operation), so matching on
+                # original_path is stable.
+                conn.execute("UPDATE change_set_files SET after_hash=? WHERE change_set_id=? AND original_path=?",
+                             (file_hash(path), change_id, canonical_path(path)))
+                return
             conn.execute("UPDATE change_set_files SET current_path=?,after_hash=? WHERE change_set_id=? AND drawing_id=?",
                          (path, file_hash(path), change_id, drawing_id))
 
@@ -169,9 +247,42 @@ class ChangeManager:
                 return change
             if change["status"] != "pending" or not change["validation"] or any(not row["passed"] for row in change["validation"]):
                 raise ValueError("Only a successfully validated pending changeset can be kept")
-            self._check_files(change)
+            # Deliberately no file checks. `keep` writes nothing — it only
+            # marks the changeset accepted — so it cannot overwrite anyone's
+            # work and has nothing to verify. It used to share `revert`'s
+            # freshness check, which meant that opening the drawing in AutoCAD
+            # and saving any unrelated edit made keep AND revert refuse
+            # forever, after which the conflict check in `apply` locked that
+            # drawing out of every future changeset with no way back except
+            # editing the database by hand.
             with connection() as conn:
                 conn.execute("UPDATE change_sets SET status='kept' WHERE change_set_id=?", (change_id,))
+            return get_change_set(change_id)
+
+    def discard(self, change_id):
+        """Release a changeset without restoring files, so the drawing unblocks.
+
+        `apply` refuses to touch a drawing that has a changeset in
+        'applying', 'pending', 'error' or 'reverting'. That is the right
+        default — it stops two changesets fighting over one file — but it
+        means any changeset that can no longer be kept or reverted takes its
+        drawing out of service permanently, and the only way out was editing
+        the database by hand.
+
+        This deliberately does NOT touch the filesystem: whatever is on disk
+        stays exactly as it is, and the backup is left in place so it can
+        still be recovered manually. It only records that the caller has
+        decided this changeset is no longer pending a decision.
+        """
+        with CAD_LOCK:
+            change = get_change_set(change_id)
+            if change["status"] in {"kept", "reverted", "discarded"}:
+                return change
+            with connection() as conn:
+                conn.execute(
+                    "UPDATE change_sets SET status='discarded' WHERE change_set_id=?",
+                    (change_id,),
+                )
             return get_change_set(change_id)
 
     @staticmethod
@@ -185,9 +296,25 @@ class ChangeManager:
             # still matches `after_hash` unconditionally requiring `current` to
             # exist below would otherwise permanently block a retry.
             resuming_revert = change["status"] == "reverting" and not current.exists()
-            if not resuming_revert:
-                expected = item["after_hash"] or item["before_hash"]
-                if not current.exists() or file_hash(current) != expected:
+            # `after_hash` is written only once `execute_operation` has already
+            # saved the file, so a NULL here means the process died between the
+            # save and the bookkeeping. The file on disk could be either the
+            # pre-edit or the post-edit content and there is no way to tell
+            # which. Comparing it against `before_hash` — as the old
+            # `after_hash or before_hash` fallback did — refused the revert in
+            # exactly the case revert exists for, and left the drawing locked
+            # out of every future changeset. The backup is integrity-checked
+            # just below, so restoring from it returns the file to a known
+            # state; that is strictly better than refusing forever.
+            interrupted_apply = item["after_hash"] is None
+            if not (resuming_revert or interrupted_apply):
+                # `before_hash` is accepted as well as `after_hash` because an
+                # in-place revert interrupted after `os.replace` leaves the
+                # file already correctly restored. Re-running the restore from
+                # backup is idempotent, so resuming is safe — whereas the old
+                # check saw a "wrong" hash and refused the retry permanently.
+                acceptable = {item["after_hash"], item["before_hash"]} - {None}
+                if not current.exists() or file_hash(current) not in acceptable:
                     raise ValueError("Drawing changed after this changeset; refusing to overwrite later work")
             if file_hash(item["backup_path"]) != item["before_hash"]:
                 raise ValueError("Backup integrity check failed")
@@ -258,11 +385,19 @@ class ChangeManager:
                 finally:
                     temporary.unlink(missing_ok=True)
                 with connection() as conn:
-                    conn.execute("UPDATE drawings SET path=?,filename=?,scan_status='pending' WHERE drawing_id=?",
-                                 (str(original), original.name, item["drawing_id"]))
-                    conn.execute("UPDATE change_set_files SET current_path=original_path,after_hash=before_hash WHERE change_set_id=? AND drawing_id=?",
-                                 (change_id, item["drawing_id"]))
-                refresh_drawing(item["drawing_id"], original, self.extractor_factory)
+                    # Keyed on original_path, not drawing_id: a file-level
+                    # changeset (from sketch/P&ID/CAD3D/vessel/place-symbol/
+                    # autocad-edit) covers a drawing that is not registered in
+                    # any project and carries drawing_id NULL, and `WHERE
+                    # drawing_id = NULL` never matches anything.
+                    conn.execute("UPDATE change_set_files SET current_path=original_path,after_hash=before_hash WHERE change_set_id=? AND original_path=?",
+                                 (change_id, item["original_path"]))
+                    if item["drawing_id"] is not None:
+                        conn.execute("UPDATE drawings SET path=?,filename=?,scan_status='pending' WHERE drawing_id=?",
+                                     (str(original), original.name, item["drawing_id"]))
+                # Only an indexed drawing has an index entry to refresh.
+                if item["drawing_id"] is not None:
+                    refresh_drawing(item["drawing_id"], original, self.extractor_factory)
             with connection() as conn:
                 conn.execute("UPDATE change_sets SET status='reverted' WHERE change_set_id=?", (change_id,))
             return get_change_set(change_id)

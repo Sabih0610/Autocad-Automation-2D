@@ -113,3 +113,24 @@ def test_connection_still_self_heals_relationship_schema_on_every_call(tmp_path)
             "SELECT count(*) FROM relationships WHERE source_entity_id='e1' AND relationship_type='appears_in'"
         ).fetchone()[0]
     assert appears_in == 1
+
+
+def test_first_connection_to_a_fresh_database_has_no_open_transaction(tmp_path, monkeypatch):
+    """`connection()` must never hand back a connection that is already inside
+    a transaction.
+
+    Initialising a brand-new database runs `ensure_spatial`'s backfill INSERT,
+    which implicitly opens one. Any caller that then issued its own
+    `BEGIN IMMEDIATE` — `ChangeManager.apply` and `apply_file_edit` both do, to
+    claim their target files — failed with "cannot start a transaction within
+    a transaction". It only bit whichever call happened to touch a fresh
+    database first, which is why it stayed hidden for so long."""
+    from src.logging import db as jobs_db
+
+    monkeypatch.setattr(jobs_db, "DB_PATH", tmp_path / "brand-new.db")
+
+    with database.connection() as conn:
+        assert conn.in_transaction is False
+        # The operation that actually failed before.
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("ROLLBACK")

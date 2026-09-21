@@ -402,7 +402,7 @@ def test_cad3d_approve_works_with_ai_generated_token(client, monkeypatch) -> Non
     )
     _patch_executor(monkeypatch, captured)
 
-    approve = client.post("/api/cad3d/approve", json={"token": response.json()["token"]})
+    approve = client.post("/api/cad3d/approve", json={"token": response.json()["token"], "use_active_document": True})
 
     assert approve.status_code == 200
     assert captured["execute_calls"][0]["scene_data"]["title"] == "AI 3D Scene"
@@ -413,7 +413,7 @@ def test_cad3d_approve_updates_scene_state_after_success(client, monkeypatch, sc
     token = response.json()["token"]
     _patch_executor(monkeypatch, captured)
 
-    approve = client.post("/api/cad3d/approve", json={"token": token})
+    approve = client.post("/api/cad3d/approve", json={"token": token, "use_active_document": True})
     record = scene_store.get(token)
 
     assert approve.status_code == 200
@@ -427,7 +427,7 @@ def test_cad3d_approve_response_includes_scene_state_fields(client, monkeypatch)
     token = response.json()["token"]
     _patch_executor(monkeypatch, captured)
 
-    approve = client.post("/api/cad3d/approve", json={"token": token})
+    approve = client.post("/api/cad3d/approve", json={"token": token, "use_active_document": True})
     data = approve.json()
 
     assert approve.status_code == 200
@@ -513,7 +513,7 @@ def test_cad3d_approve_passes_pipe_connection_scene_to_executor(client, monkeypa
     )
     _patch_executor(monkeypatch, captured)
 
-    approve = client.post("/api/cad3d/approve", json={"token": response.json()["token"]})
+    approve = client.post("/api/cad3d/approve", json={"token": response.json()["token"], "use_active_document": True})
 
     assert approve.status_code == 200
     assert any(
@@ -581,7 +581,7 @@ def test_scene_state_update_failure_does_not_break_successful_approval(client, m
 
     monkeypatch.setattr(cad3d_routes, "get_default_cad3d_scene_store", lambda: FailingStore())
 
-    approve = client.post("/api/cad3d/approve", json={"token": token})
+    approve = client.post("/api/cad3d/approve", json={"token": token, "use_active_document": True})
 
     assert approve.status_code == 200
     assert approve.json()["ok"] is True
@@ -594,7 +594,7 @@ def test_cad3d_edit_uses_latest_scene_when_token_missing(client, scene_store) ->
 
     response = client.post(
         "/api/cad3d/edit",
-        json={"prompt": "Move pump P-101 1000 mm to the right.", "execute": False},
+        json={"prompt": "Move pump P-101 1000 mm to the right.", "execute": False, "use_active_document": True},
     )
 
     assert response.status_code == 200
@@ -607,7 +607,7 @@ def test_cad3d_edit_uses_provided_token_when_present(client, scene_store) -> Non
 
     response = client.post(
         "/api/cad3d/edit",
-        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": False},
+        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": False, "use_active_document": True},
     )
 
     assert response.status_code == 200
@@ -619,7 +619,7 @@ def test_cad3d_edit_returns_edited_token_and_edit_plan(client, scene_store) -> N
 
     response = client.post(
         "/api/cad3d/edit",
-        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": False},
+        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": False, "use_active_document": True},
     )
 
     assert response.status_code == 200
@@ -634,7 +634,7 @@ def test_cad3d_edit_stores_edited_scene_state(client, scene_store) -> None:
 
     response = client.post(
         "/api/cad3d/edit",
-        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": False},
+        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": False, "use_active_document": True},
     )
 
     record = scene_store.get(response.json()["edited_token"])
@@ -652,7 +652,7 @@ def test_cad3d_edit_execute_false_does_not_call_executor(client, monkeypatch, sc
 
     response = client.post(
         "/api/cad3d/edit",
-        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": False},
+        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": False, "use_active_document": True},
     )
 
     assert response.status_code == 200
@@ -669,8 +669,7 @@ def test_cad3d_edit_execute_true_calls_fake_executor(client, monkeypatch, scene_
         json={
             "token": token,
             "prompt": "Move pump P-101 1000 mm to the right.",
-            "execute": True,
-        },
+            "execute": True, "use_active_document": True},
     )
 
     assert response.status_code == 200
@@ -679,7 +678,7 @@ def test_cad3d_edit_execute_true_calls_fake_executor(client, monkeypatch, scene_
     edited_token = response.json()["edited_token"]
     assert edited_token not in cad3d_routes._CAD3D_CACHE
 
-    replay = client.post("/api/cad3d/approve", json={"token": edited_token})
+    replay = client.post("/api/cad3d/approve", json={"token": edited_token, "use_active_document": True})
     assert replay.status_code == 404
     assert len(captured["execute_calls"]) == 1
 
@@ -699,7 +698,7 @@ def test_cad3d_edit_failed_execution_keeps_token_for_retry(
 
     response = client.post(
         "/api/cad3d/edit",
-        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": True},
+        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": True, "use_active_document": True},
     )
 
     edited_token = response.json()["edited_token"]
@@ -714,7 +713,7 @@ def test_cad3d_edit_execute_true_marks_edited_scene_approved(client, monkeypatch
 
     response = client.post(
         "/api/cad3d/edit",
-        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": True},
+        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "execute": True, "use_active_document": True},
     )
 
     record = scene_store.get(response.json()["edited_token"])
@@ -726,7 +725,7 @@ def test_cad3d_edit_execute_true_marks_edited_scene_approved(client, monkeypatch
 def test_cad3d_edit_returns_404_for_missing_token(client) -> None:
     response = client.post(
         "/api/cad3d/edit",
-        json={"token": "missing", "prompt": "Move pump P-101 1000 mm to the right."},
+        json={"token": "missing", "prompt": "Move pump P-101 1000 mm to the right.", "use_active_document": True},
     )
 
     assert response.status_code == 404
@@ -737,7 +736,7 @@ def test_cad3d_edit_returns_400_for_invalid_edit(client, scene_store) -> None:
 
     response = client.post(
         "/api/cad3d/edit",
-        json={"token": token, "prompt": "Make the model more beautiful."},
+        json={"token": token, "prompt": "Make the model more beautiful.", "use_active_document": True},
     )
 
     assert response.status_code == 400
@@ -748,7 +747,7 @@ def test_cad3d_edit_simple_move_changes_component_center(client, scene_store) ->
 
     response = client.post(
         "/api/cad3d/edit",
-        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right."},
+        json={"token": token, "prompt": "Move pump P-101 1000 mm to the right.", "use_active_document": True},
     )
     edited = scene_store.get(response.json()["edited_token"]).scene
     pump = next(component for component in edited["components"] if component["id"] == "P101")
@@ -761,7 +760,7 @@ def test_cad3d_edit_delete_removes_component_from_stored_scene(client, scene_sto
 
     response = client.post(
         "/api/cad3d/edit",
-        json={"token": token, "prompt": "Delete pump P-101."},
+        json={"token": token, "prompt": "Delete pump P-101.", "use_active_document": True},
     )
     edited = scene_store.get(response.json()["edited_token"]).scene
     component_ids = {component["id"] for component in edited["components"]}
@@ -776,7 +775,7 @@ def test_cad3d_edit_update_dimension_changes_stored_scene_field(client, scene_st
 
     response = client.post(
         "/api/cad3d/edit",
-        json={"token": token, "prompt": "Change V-201 length to 4500 mm."},
+        json={"token": token, "prompt": "Change V-201 length to 4500 mm.", "use_active_document": True},
     )
     edited = scene_store.get(response.json()["edited_token"]).scene
     vessel = next(component for component in edited["components"] if component["id"] == "V201")
@@ -801,7 +800,7 @@ def test_cad3d_approve_with_valid_token_calls_executor(client, monkeypatch) -> N
     token = response.json()["token"]
     _patch_executor(monkeypatch, captured)
 
-    approve = client.post("/api/cad3d/approve", json={"token": token})
+    approve = client.post("/api/cad3d/approve", json={"token": token, "use_active_document": True})
 
     assert approve.status_code == 200
     assert captured["execute_calls"][0]["scene_data"] == FAKE_CAD3D_SCENE_DATA
@@ -813,7 +812,7 @@ def test_cad3d_approve_response_includes_execution_result(client, monkeypatch) -
     response, captured = _generate(client, monkeypatch)
     _patch_executor(monkeypatch, captured)
 
-    approve = client.post("/api/cad3d/approve", json={"token": response.json()["token"]})
+    approve = client.post("/api/cad3d/approve", json={"token": response.json()["token"], "use_active_document": True})
 
     assert approve.json()["execution_result"] == FAKE_3D_EXECUTION_RESULT
 
@@ -826,11 +825,11 @@ def test_cad3d_approve_token_is_consumed_on_success_and_cannot_replay(client, mo
     token = response.json()["token"]
     _patch_executor(monkeypatch, captured)
 
-    first = client.post("/api/cad3d/approve", json={"token": token})
+    first = client.post("/api/cad3d/approve", json={"token": token, "use_active_document": True})
     assert first.status_code == 200
     assert len(captured["execute_calls"]) == 1
 
-    replay = client.post("/api/cad3d/approve", json={"token": token})
+    replay = client.post("/api/cad3d/approve", json={"token": token, "use_active_document": True})
     assert replay.status_code == 404
     assert len(captured["execute_calls"]) == 1  # not executed a second time
 
@@ -838,7 +837,7 @@ def test_cad3d_approve_token_is_consumed_on_success_and_cannot_replay(client, mo
 def test_cad3d_approve_missing_token_returns_404(client, monkeypatch) -> None:
     _patch_executor(monkeypatch)
 
-    response = client.post("/api/cad3d/approve", json={"token": "missing"})
+    response = client.post("/api/cad3d/approve", json={"token": "missing", "use_active_document": True})
 
     assert response.status_code == 404
 
@@ -853,7 +852,7 @@ def test_cad3d_approve_expired_token_returns_404(client, monkeypatch) -> None:
     )
     _patch_executor(monkeypatch, captured)
 
-    approve = client.post("/api/cad3d/approve", json={"token": token})
+    approve = client.post("/api/cad3d/approve", json={"token": token, "use_active_document": True})
 
     assert approve.status_code == 404
     assert token not in cad3d_routes._CAD3D_CACHE
@@ -870,7 +869,7 @@ def test_cad3d_approve_token_within_ttl_still_works(client, monkeypatch) -> None
     )
     _patch_executor(monkeypatch, captured)
 
-    approve = client.post("/api/cad3d/approve", json={"token": token})
+    approve = client.post("/api/cad3d/approve", json={"token": token, "use_active_document": True})
 
     assert approve.status_code == 200
     assert len(captured["execute_calls"]) == 1
@@ -891,14 +890,14 @@ def test_cad3d_purge_removes_expired_token_without_evicting_live_token(
     _patch_executor(monkeypatch, captured)
 
     expired_approve = client.post(
-        "/api/cad3d/approve", json={"token": expired_token}
+        "/api/cad3d/approve", json={"token": expired_token, "use_active_document": True}
     )
 
     assert expired_approve.status_code == 404
     assert expired_token not in cad3d_routes._CAD3D_CACHE
     assert live_token in cad3d_routes._CAD3D_CACHE
 
-    live_approve = client.post("/api/cad3d/approve", json={"token": live_token})
+    live_approve = client.post("/api/cad3d/approve", json={"token": live_token, "use_active_document": True})
     assert live_approve.status_code == 200
     assert len(captured["execute_calls"]) == 1
 
@@ -907,7 +906,7 @@ def test_cad3d_approve_passes_save_flag_to_executor(client, monkeypatch) -> None
     response, captured = _generate(client, monkeypatch)
     _patch_executor(monkeypatch, captured)
 
-    client.post("/api/cad3d/approve", json={"token": response.json()["token"], "save": True})
+    client.post("/api/cad3d/approve", json={"token": response.json()["token"], "save": True, "use_active_document": True})
 
     assert captured["execute_calls"][0]["save"] is True
 
@@ -928,7 +927,7 @@ def test_cad3d_approve_handles_execution_failure(client, monkeypatch) -> None:
     response, captured = _generate(client, monkeypatch)
     _patch_executor(monkeypatch, captured, error=AutoCAD3DExecutionError("bad 3D scene"))
 
-    approve = client.post("/api/cad3d/approve", json={"token": response.json()["token"]})
+    approve = client.post("/api/cad3d/approve", json={"token": response.json()["token"], "use_active_document": True})
 
     assert approve.status_code == 500
     assert "3D CAD execution failed" in approve.json()["detail"]
@@ -938,7 +937,7 @@ def test_cad3d_approve_handles_autocad_not_running(client, monkeypatch) -> None:
     response, captured = _generate(client, monkeypatch)
     _patch_executor(monkeypatch, captured, error=AutoCADNotRunningError("AutoCAD unavailable"))
 
-    approve = client.post("/api/cad3d/approve", json={"token": response.json()["token"]})
+    approve = client.post("/api/cad3d/approve", json={"token": response.json()["token"], "use_active_document": True})
 
     assert approve.status_code == 503
     assert "AutoCAD is not running" in approve.json()["detail"]

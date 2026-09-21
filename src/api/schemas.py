@@ -118,6 +118,13 @@ class PIDApproveRequest(BaseModel):
         default=None,
         description="Optional DWG path to open before execution. If omitted, active drawing is used.",
     )
+    use_active_document: bool = Field(
+        default=False,
+        description=(
+            "Allow writing to whichever drawing AutoCAD currently has focused, "
+            "when no target_dwg_path is given."
+        ),
+    )
 
 
 class CAD3DGenerateRequest(BaseModel):
@@ -152,6 +159,13 @@ class CAD3DApproveRequest(BaseModel):
         default=None,
         description="Optional DWG path to open before execution. If omitted, active drawing is used.",
     )
+    use_active_document: bool = Field(
+        default=False,
+        description=(
+            "Allow writing to whichever drawing AutoCAD currently has focused, "
+            "when no target_dwg_path is given."
+        ),
+    )
 
 
 class CAD3DEditRequest(BaseModel):
@@ -173,6 +187,13 @@ class CAD3DEditRequest(BaseModel):
     target_dwg_path: str | None = Field(
         default=None,
         description="Optional DWG path to open before edited-scene execution.",
+    )
+    use_active_document: bool = Field(
+        default=False,
+        description=(
+            "Allow writing to whichever drawing AutoCAD currently has focused, "
+            "when no target_dwg_path is given."
+        ),
     )
     create_new_token: bool = Field(
         default=True,

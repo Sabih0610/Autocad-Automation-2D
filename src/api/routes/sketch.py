@@ -25,6 +25,7 @@ from src.ai.chunked_command_orchestrator import (
     ChunkedCommandOrchestrationError,
     generate_chunked_verified_command_sequence,
 )
+from src.api.routes._revertible import require_explicit_target, run_revertible
 from src.framework.commands.executor import execute_command_sequence
 from src.framework.commands.preview import render_preview_sequence
 from src.parametric.vessel.dwg_export import AutoCADNotRunningError
@@ -54,6 +55,7 @@ class SketchApproveRequest(BaseModel):
     token: str = Field(..., min_length=1)
     save: bool = True
     target_dwg_path: str | None = None
+    use_active_document: bool = False
 
 
 def _now() -> datetime:
@@ -389,6 +391,7 @@ def sketch_approve(request: SketchApproveRequest):
         )
 
     command_sequence = entry["command_sequence"]
+    require_explicit_target(request.target_dwg_path, request.use_active_document)
     verifier_result = entry.get("verifier_result")
     preview_path = entry.get("preview_path")
 
@@ -397,9 +400,14 @@ def sketch_approve(request: SketchApproveRequest):
 
         pythoncom.CoInitialize()
         try:
-            execution_result = execute_command_sequence(
-                command_sequence,
-                target_dwg_path=request.target_dwg_path,
+            execution_result, change_set_id, change_set_skipped_reason = run_revertible(
+                request.target_dwg_path,
+                f"Sketch: {command_sequence.get('summary') or 'generated drawing'}",
+                lambda: execute_command_sequence(
+                    command_sequence,
+                    target_dwg_path=request.target_dwg_path,
+                    save=request.save,
+                ),
                 save=request.save,
             )
         finally:
@@ -433,4 +441,6 @@ def sketch_approve(request: SketchApproveRequest):
             else None
         ),
         "preview_download_url": _preview_download_url(preview_path),
+        "change_set_id": change_set_id,
+        "change_set_skipped_reason": change_set_skipped_reason,
     }

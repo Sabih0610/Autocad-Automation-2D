@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
+from src.api.routes._revertible import run_revertible
 from src.api.schemas import PlaceSymbolRequest
 
 
@@ -34,10 +35,20 @@ def place_symbol(request: PlaceSymbolRequest):
                 detail="AutoCAD is not reachable. Ensure AutoCAD is running with a drawing open.",
             ) from exc
 
-        insert_result = insert_symbol(
-            doc=doc,
-            spec=planned_spec,
-            dry_run=not request.execute,
+        # `connect_to_autocad` resolves the active document, so the path is
+        # only knowable here — but it is knowable *before* the write, which is
+        # what a backup needs. A dry run changes nothing, so it gets no
+        # changeset.
+        document_path = getattr(doc, "FullName", None) if request.execute else None
+        insert_result, change_set_id, change_set_skipped_reason = run_revertible(
+            document_path,
+            f"Place symbol: {prompt}",
+            lambda: insert_symbol(
+                doc=doc,
+                spec=planned_spec,
+                dry_run=not request.execute,
+            ),
+            save=bool(request.execute),
         )
 
         return {
@@ -47,6 +58,8 @@ def place_symbol(request: PlaceSymbolRequest):
             "insert_result": insert_result,
             "connected_to": getattr(acad, "Caption", None),
             "active_drawing": getattr(doc, "Name", None),
+            "change_set_id": change_set_id,
+            "change_set_skipped_reason": change_set_skipped_reason,
         }
     finally:
         pythoncom.CoUninitialize()

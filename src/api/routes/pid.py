@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from src.ai.pid_component_planner import plan_and_render_pid_component_scene_resilient
+from src.api.routes._revertible import require_explicit_target, run_revertible
 from src.api.schemas import PIDApproveRequest, PIDGenerateRequest
 from src.framework.commands.executor import execute_command_sequence
 from src.parametric.vessel.dwg_export import AutoCADNotRunningError
@@ -114,17 +115,23 @@ def pid_approve(request: PIDApproveRequest):
         )
 
     command_sequence = cached["command_sequence"]
+    require_explicit_target(request.target_dwg_path, request.use_active_document)
 
     try:
         import pythoncom
 
         pythoncom.CoInitialize()
         try:
-            execution_result = execute_command_sequence(
-                command_sequence,
-                target_dwg_path=request.target_dwg_path,
+            execution_result, change_set_id, change_set_skipped_reason = run_revertible(
+                request.target_dwg_path,
+                f"P&ID: {cached['component_scene'].get('title') or 'generated drawing'}",
+                lambda: execute_command_sequence(
+                    command_sequence,
+                    target_dwg_path=request.target_dwg_path,
+                    save=request.save,
+                    zoom_extents=True,
+                ),
                 save=request.save,
-                zoom_extents=True,
             )
         finally:
             pythoncom.CoUninitialize()
@@ -161,4 +168,6 @@ def pid_approve(request: PIDApproveRequest):
         "component_count": cached["component_count"],
         "command_count": len(command_sequence.get("commands", [])),
         "title": cached["component_scene"].get("title"),
+        "change_set_id": change_set_id,
+        "change_set_skipped_reason": change_set_skipped_reason,
     }
